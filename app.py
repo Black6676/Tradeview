@@ -163,9 +163,10 @@ def trigger_scan():
 
 # ── Run ────────────────────────────────────────────────────────
 
-# Start background scanner (gunicorn + direct run compatible)
+# Only start scanner locally — Render free tier has 512MB RAM limit
 import os
-if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+IS_RENDER = os.environ.get("RENDER", False)
+if not IS_RENDER and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
     start_scanner()
 
 if __name__ == "__main__":
