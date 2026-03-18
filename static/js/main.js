@@ -27,6 +27,10 @@ function initCharts() {
   const container = document.getElementById('chart');
   if (!container) throw new Error('Chart container not found');
 
+  // Force container to have height before chart init
+  if (!container.offsetHeight) {
+    container.style.height = (window.innerHeight - 250) + 'px';
+  }
   const w = container.offsetWidth  || window.innerWidth  || 800;
   const h = container.offsetHeight || window.innerHeight - 250 || 500;
 
