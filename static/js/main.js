@@ -27,12 +27,11 @@ function initCharts() {
   const container = document.getElementById('chart');
   if (!container) throw new Error('Chart container not found');
 
-  // Force container to have height before chart init
-  if (!container.offsetHeight) {
-    container.style.height = (window.innerHeight - 250) + 'px';
-  }
-  const w = container.offsetWidth  || window.innerWidth  || 800;
-  const h = container.offsetHeight || window.innerHeight - 250 || 500;
+  // Set explicit pixel dimensions — never rely on CSS for chart sizing
+  const w = window.innerWidth  - (window.innerWidth  > 768 ? 200 : 0);
+  const h = window.innerHeight - 230;
+  container.style.width  = w + 'px';
+  container.style.height = h + 'px';
 
   chart = LightweightCharts.createChart(container, {
     width:  w,
@@ -74,9 +73,10 @@ function initCharts() {
   /* RSI chart */
   const rsiContainer = document.getElementById('rsiChart');
   if (rsiContainer) {
-    const rw = rsiContainer.offsetWidth || w;
+    rsiContainer.style.width  = w + 'px';
+    rsiContainer.style.height = '120px';
     rsiChart = LightweightCharts.createChart(rsiContainer, {
-      width:  rw,
+      width:  w,
       height: 120,
       layout: { background: { color: '#0a0b0e' }, textColor: '#8892a8', fontFamily: "'Space Mono', monospace", fontSize: 10 },
       grid:   { vertLines: { color: '#1a1f2e', style: 1 }, horzLines: { color: '#1a1f2e', style: 1 } },
