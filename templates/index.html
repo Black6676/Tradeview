@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TradeView — Market Analysis</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet"/>
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="logo">
+      <span class="logo-mark">T</span>
+      <span class="logo-text">TRADEVIEW</span>
+    </div>
+    <nav class="nav-tabs"><a href="/" class="nav-tab active">Live Chart</a><a href="/backtest" class="nav-tab">Backtest</a><a href="/alerts" class="nav-tab">Alerts</a></nav>
+    <div class="instrument-tabs" id="instrumentTabs">
+      <button class="inst-btn active" data-symbol="EURUSD">EUR/USD</button>
+      <button class="inst-btn" data-symbol="XAUUSD">XAU/USD</button>
+      <button class="inst-btn" data-symbol="USDJPY">USD/JPY</button>
+    </div>
+    <div class="tf-tabs" id="tfTabs">
+      <button class="tf-btn" data-tf="15m">15m</button>
+      <button class="tf-btn active" data-tf="1h">1H</button>
+      <button class="tf-btn" data-tf="4h">4H</button>
+      <button class="tf-btn" data-tf="1d">1D</button>
+    </div>
+  </header>
+
+  <div class="price-strip">
+    <div class="price-info">
+      <span class="pair-label" id="pairLabel">EUR/USD</span>
+      <span class="price-main" id="priceMain">—</span>
+      <span class="price-change" id="priceChange">—</span>
+    </div>
+    <div class="price-meta">
+      <span class="meta-item"><span class="meta-key">O</span><span class="meta-val" id="metaO">—</span></span>
+      <span class="meta-item"><span class="meta-key">H</span><span class="meta-val" id="metaH">—</span></span>
+      <span class="meta-item"><span class="meta-key">L</span><span class="meta-val" id="metaL">—</span></span>
+      <span class="meta-item"><span class="meta-key">C</span><span class="meta-val" id="metaC">—</span></span>
+    </div>
+    <div class="ema-legend">
+      <span class="ema-dot" style="background:#f0b429"></span><span>EMA20</span>
+      <span class="ema-dot" style="background:#4fc3f7"></span><span>EMA50</span>
+      <span class="ema-dot" style="background:#ef5350"></span><span>EMA200</span>
+    </div>
+    <button class="refresh-btn" id="refreshBtn">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M13.5 8A5.5 5.5 0 1 1 8 2.5c1.6 0 3 .67 4 1.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M12 1v3.5H8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Refresh
+    </button>
+  </div>
+
+  <div class="main-layout">
+    <main class="chart-col">
+      <div class="chart-wrap">
+        <div id="chart"></div>
+        <div class="loading-overlay" id="loadingOverlay">
+          <div class="spinner"></div>
+          <span class="loading-text">Running analysis…</span>
+        </div>
+        <div class="error-overlay hidden" id="errorOverlay">
+          <span class="error-icon">⚠</span>
+          <span id="errorMsg">Something went wrong.</span>
+          <button onclick="loadChart()">Retry</button>
+        </div>
+      </div>
+      <div class="rsi-wrap">
+        <span class="rsi-label">RSI 14</span>
+        <div id="rsiChart"></div>
+      </div>
+    </main>
+
+    <aside class="analysis-panel">
+      <div class="panel-title">Analysis</div>
+
+      <div class="panel-section">
+        <div class="panel-label">LTF Bias</div>
+        <span class="badge neutral" id="biasBadge">—</span>
+      </div>
+      <div class="panel-section">
+        <div class="panel-label">Daily HTF Bias</div>
+        <span class="badge neutral" id="htfBadge">—</span>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-label">RSI (14)</div>
+        <span class="panel-value" id="rsiValue">—</span>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-label">Order Blocks</div>
+        <span class="panel-value" id="obCount">—</span>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-label">Entry Signals</div>
+        <span class="panel-value" id="sigCount">—</span>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-label">Last Signal</div>
+        <span class="panel-value small" id="lastSignal">—</span>
+      </div>
+
+      <div class="panel-section" id="slTpBlock" style="display:none">
+        <div class="panel-label">Stop Loss</div>
+        <span class="panel-value red" id="slValue">—</span>
+        <div class="panel-label" style="margin-top:8px">Take Profit</div>
+        <span class="panel-value green" id="tpValue">—</span>
+        <div class="panel-label" style="margin-top:8px">Risk / Reward</div>
+        <span class="panel-value" id="rrValue">—</span>
+      </div>
+
+      <div class="panel-divider"></div>
+
+      <!-- Plain English Summary -->
+      <div class="panel-label">AI Summary</div>
+      <div class="summary-box" id="summaryBox">
+        <div class="summary-line" id="sumTrend">—</div>
+        <div class="summary-line" id="sumRsi">—</div>
+        <div class="summary-line" id="sumOb">—</div>
+        <div class="summary-line highlight" id="sumSig">—</div>
+        <div class="summary-line rec" id="sumRec">—</div>
+      </div>
+
+      <div class="panel-divider"></div>
+
+      <div class="legend-block">
+        <div class="panel-label">Legend</div>
+        <div class="legend-item"><span class="legend-box bull"></span>Bullish OB zone</div>
+        <div class="legend-item"><span class="legend-box bear"></span>Bearish OB zone</div>
+        <div class="legend-item"><span class="legend-arrow buy">▲</span>Buy signal</div>
+        <div class="legend-item"><span class="legend-arrow sell">▼</span>Sell signal</div>
+      </div>
+    </aside>
+  </div>
+
+  <footer class="statusbar">
+    <span id="statusText">Ready</span>
+    <span class="status-right">Twelve Data · Phase 3 · Hybrid SMC + AI Summary</span>
+  </footer>
+
+  <script src="/static/js/main.js"></script>
+</body>
+</html>

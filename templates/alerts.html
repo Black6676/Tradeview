@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TradeView — Alerts</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+  <link rel="stylesheet" href="/static/css/backtest.css"/>
+  <link rel="stylesheet" href="/static/css/alerts.css"/>
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="logo">
+      <span class="logo-mark">T</span>
+      <span class="logo-text">TRADEVIEW</span>
+    </div>
+    <nav class="nav-tabs">
+      <a href="/" class="nav-tab">Live Chart</a>
+      <a href="/backtest" class="nav-tab">Backtest</a>
+      <a href="/alerts" class="nav-tab active">Alerts</a>
+    </nav>
+    <div class="scanner-badge" id="scannerBadge">
+      <span class="scanner-dot"></span>
+      <span id="scannerStatus">Scanner starting…</span>
+    </div>
+  </header>
+
+  <div class="alerts-layout">
+
+    <!-- Left: Signal feed -->
+    <main class="alerts-feed">
+      <div class="feed-header">
+        <span class="feed-title">Signal Feed</span>
+        <div class="feed-actions">
+          <button class="action-btn" id="scanNowBtn">Scan Now</button>
+          <button class="action-btn danger" id="clearBtn">Clear</button>
+        </div>
+      </div>
+
+      <div id="alertList">
+        <div class="empty-alerts" id="emptyState">
+          <div class="empty-icon">◎</div>
+          <div class="empty-text">No signals yet — scanner checks every 15 minutes</div>
+          <div class="empty-sub">Click "Scan Now" to run an immediate check</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Right: Email config -->
+    <aside class="alerts-config">
+      <div class="config-title">Email Alerts</div>
+
+      <div class="config-section">
+        <div class="config-label">Enable email notifications</div>
+        <label class="toggle-wrap">
+          <input type="checkbox" id="emailToggle"/>
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </div>
+
+      <div class="config-section">
+        <div class="config-label">Your Gmail address (sender)</div>
+        <input class="config-input" type="email" id="senderEmail" placeholder="you@gmail.com"/>
+      </div>
+
+      <div class="config-section">
+        <div class="config-label">Gmail App Password</div>
+        <input class="config-input" type="password" id="appPassword" placeholder="xxxx xxxx xxxx xxxx"/>
+        <div class="config-hint">
+          Not your Gmail password. Generate one at:<br/>
+          <a href="https://myaccount.google.com/apppasswords" target="_blank">myaccount.google.com/apppasswords</a>
+        </div>
+      </div>
+
+      <div class="config-section">
+        <div class="config-label">Recipient email</div>
+        <input class="config-input" type="email" id="recipientEmail" placeholder="alerts@youremail.com"/>
+      </div>
+
+      <button class="save-btn" id="saveConfigBtn">Save Configuration</button>
+      <div class="save-status" id="saveStatus"></div>
+
+      <div class="config-divider"></div>
+
+      <div class="config-title" style="font-size:12px;margin-bottom:10px;">Scanner Coverage</div>
+      <div class="coverage-list">
+        <div class="coverage-item"><span class="cov-pair">EUR/USD</span><span class="cov-tf">1H · 4H</span></div>
+        <div class="coverage-item"><span class="cov-pair">XAU/USD</span><span class="cov-tf">1H</span></div>
+        <div class="coverage-item"><span class="cov-pair">USD/JPY</span><span class="cov-tf">1H</span></div>
+      </div>
+
+      <div class="config-divider"></div>
+
+      <div class="config-title" style="font-size:12px;margin-bottom:10px;">Browser Notifications</div>
+      <button class="action-btn" id="permBtn" style="width:100%">Enable Browser Notifications</button>
+      <div class="config-hint" style="margin-top:8px;" id="permStatus">Click to request notification permission</div>
+    </aside>
+
+  </div>
+
+  <footer class="statusbar">
+    <span id="alertStatus">Ready</span>
+    <span class="status-right">Scanner · Every 15 min · Phase 4A</span>
+  </footer>
+
+  <script src="/static/js/alerts.js"></script>
+</body>
+</html>

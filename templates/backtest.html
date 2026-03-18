@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TradeView — Backtest</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet"/>
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+  <link rel="stylesheet" href="/static/css/backtest.css"/>
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="logo">
+      <span class="logo-mark">T</span>
+      <span class="logo-text">TRADEVIEW</span>
+    </div>
+    <nav class="nav-tabs">
+      <a href="/" class="nav-tab">Live Chart</a>
+      <a href="/backtest" class="nav-tab active">Backtest</a><a href="/alerts" class="nav-tab">Alerts</a>
+    </nav>
+  </header>
+
+  <div class="bt-controls">
+    <div class="bt-control-group">
+      <label class="bt-label">Instrument</label>
+      <div class="instrument-tabs" id="btInstrumentTabs">
+        <button class="inst-btn active" data-symbol="EURUSD">EUR/USD</button>
+        <button class="inst-btn" data-symbol="XAUUSD">XAU/USD</button>
+        <button class="inst-btn" data-symbol="USDJPY">USD/JPY</button>
+      </div>
+    </div>
+    <div class="bt-control-group">
+      <label class="bt-label">Timeframe</label>
+      <div class="tf-tabs" id="btTfTabs">
+        <button class="tf-btn" data-tf="1h">1H</button>
+        <button class="tf-btn" data-tf="4h">4H</button>
+        <button class="tf-btn active" data-tf="1d">1D</button>
+      </div>
+    </div>
+    <button class="run-btn" id="runBtn">Run Backtest</button>
+  </div>
+
+  <div class="bt-body" id="btBody">
+    <div class="bt-empty" id="btEmpty">
+      <div class="empty-icon">▶</div>
+      <div class="empty-text">Select an instrument and timeframe, then click Run Backtest</div>
+    </div>
+
+    <div class="bt-results hidden" id="btResults">
+
+      <!-- Stats row -->
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">Total Trades</div>
+          <div class="stat-value" id="stTotal">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Win Rate</div>
+          <div class="stat-value" id="stWinRate">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total R</div>
+          <div class="stat-value" id="stTotalR">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Profit Factor</div>
+          <div class="stat-value" id="stPF">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Max Drawdown</div>
+          <div class="stat-value red" id="stDD">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Wins / Losses</div>
+          <div class="stat-value" id="stWL">—</div>
+        </div>
+      </div>
+
+      <!-- Equity curve -->
+      <div class="chart-section">
+        <div class="section-title">Equity Curve (cumulative R)</div>
+        <div class="equity-wrap">
+          <div id="equityChart"></div>
+        </div>
+      </div>
+
+      <!-- Trade log -->
+      <div class="chart-section">
+        <div class="section-title">Trade Log</div>
+        <div class="trade-table-wrap">
+          <table class="trade-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Type</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>SL</th>
+                <th>TP</th>
+                <th>RSI</th>
+                <th>Result</th>
+                <th>P&L (R)</th>
+              </tr>
+            </thead>
+            <tbody id="tradeTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="bt-loading hidden" id="btLoading">
+      <div class="spinner"></div>
+      <span class="loading-text">Running backtest on historical data…</span>
+    </div>
+
+    <div class="bt-error hidden" id="btError">
+      <span class="error-icon">⚠</span>
+      <span id="btErrorMsg">Something went wrong.</span>
+      <button onclick="runBacktest()">Retry</button>
+    </div>
+  </div>
+
+  <footer class="statusbar">
+    <span id="btStatus">Ready</span>
+    <span class="status-right">Twelve Data · Phase 4B · Backtesting</span>
+  </footer>
+
+  <script src="/static/js/backtest.js"></script>
+</body>
+</html>
