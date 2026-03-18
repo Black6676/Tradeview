@@ -134,14 +134,15 @@ async function loadChart() {
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'Server error');
 
+    if (!data.candles || !data.meta) throw new Error('Invalid data received from server');
     renderCandles(data.candles);
-    renderEMAs(data.ema_lines);
-    renderRSI(data.rsi);
-    renderOrderBlocks(data.order_blocks, data.candles);
-    renderSignals(data.signals);
+    renderEMAs(data.ema_lines || {ema20:[], ema50:[], ema200:[]});
+    renderRSI(data.rsi || []);
+    renderOrderBlocks(data.order_blocks || [], data.candles);
+    renderSignals(data.signals || []);
     updatePriceStrip(data.meta);
-    updateAnalysisPanel(data.meta, data.order_blocks, data.signals);
-    updateSummaryPanel(data.summary, data.signals);
+    updateAnalysisPanel(data.meta, data.order_blocks || [], data.signals || []);
+    updateSummaryPanel(data.summary || {}, data.signals || []);
 
     chart.timeScale().fitContent();
     rsiChart.timeScale().fitContent();
@@ -292,11 +293,12 @@ function setStatus(msg)    { document.getElementById('statusText').textContent =
 
 /* ── Phase 3: Summary + SL/TP panel ── */
 function updateSummaryPanel(summary, signals) {
-  document.getElementById('sumTrend').textContent = summary.trend;
-  document.getElementById('sumRsi').textContent   = summary.rsi_desc;
-  document.getElementById('sumOb').textContent    = summary.ob_desc;
-  document.getElementById('sumSig').textContent   = summary.sig_desc;
-  document.getElementById('sumRec').textContent   = summary.rec;
+  if (!summary) return;
+  document.getElementById('sumTrend').textContent = summary.trend    || '—';
+  document.getElementById('sumRsi').textContent   = summary.rsi_desc || '—';
+  document.getElementById('sumOb').textContent    = summary.ob_desc  || '—';
+  document.getElementById('sumSig').textContent   = summary.sig_desc || '—';
+  document.getElementById('sumRec').textContent   = summary.rec      || '—';
 
   const slTpBlock = document.getElementById('slTpBlock');
   if (signals && signals.length > 0) {
