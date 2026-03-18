@@ -10,27 +10,39 @@ let ema200Series     = null;
 let rsiChart         = null;
 let rsiSeries        = null;
 let obSeries         = [];
-let signalMarkers    = [];
 
 /* ── Init ── */
-document.addEventListener('DOMContentLoaded', () => {
-  // Small delay ensures DOM is fully painted before chart init
-  setTimeout(() => {
+window.addEventListener('load', () => {
+  try {
     initCharts();
     bindControls();
     loadChart();
-  }, 100);
+  } catch(e) {
+    console.error('Init error:', e);
+    setStatus('Init error: ' + e.message);
+  }
 });
 
 function initCharts() {
   const container = document.getElementById('chart');
+  if (!container) throw new Error('Chart container not found');
 
-  const chartHeight = container.clientHeight || (window.innerHeight - 200);
+  const w = container.offsetWidth  || window.innerWidth  || 800;
+  const h = container.offsetHeight || window.innerHeight - 250 || 500;
+
   chart = LightweightCharts.createChart(container, {
-    width:  container.clientWidth  || 800,
-    height: chartHeight,
-    layout: { background: { color: '#0a0b0e' }, textColor: '#8892a8', fontFamily: "'Space Mono', monospace", fontSize: 11 },
-    grid:   { vertLines: { color: '#1a1f2e', style: 1 }, horzLines: { color: '#1a1f2e', style: 1 } },
+    width:  w,
+    height: h,
+    layout: {
+      background:  { color: '#0a0b0e' },
+      textColor:   '#8892a8',
+      fontFamily:  "'Space Mono', monospace",
+      fontSize:    11,
+    },
+    grid: {
+      vertLines: { color: '#1a1f2e', style: 1 },
+      horzLines: { color: '#1a1f2e', style: 1 },
+    },
     crosshair: {
       mode: LightweightCharts.CrosshairMode.Normal,
       vertLine: { color: '#f0b429', width: 1, style: 2, labelBackgroundColor: '#f0b429' },
@@ -55,54 +67,55 @@ function initCharts() {
   ema50Series  = chart.addLineSeries({ color: '#4fc3f7', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
   ema200Series = chart.addLineSeries({ color: '#ef5350', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
 
-  /* RSI chart below */
+  /* RSI chart */
   const rsiContainer = document.getElementById('rsiChart');
-  rsiChart = LightweightCharts.createChart(rsiContainer, {
-    width:  rsiContainer.clientWidth  || 800,
-    height: rsiContainer.clientHeight || 120,
-    layout: { background: { color: '#0a0b0e' }, textColor: '#8892a8', fontFamily: "'Space Mono', monospace", fontSize: 10 },
-    grid:   { vertLines: { color: '#1a1f2e', style: 1 }, horzLines: { color: '#1a1f2e', style: 1 } },
-    rightPriceScale: { borderColor: '#1f2535', scaleMargins: { top: 0.1, bottom: 0.1 } },
-    timeScale: { borderColor: '#1f2535', timeVisible: true, secondsVisible: false, rightOffset: 8, visible: false },
-    crosshair: {
-      vertLine: { color: '#f0b429', width: 1, style: 2, labelBackgroundColor: '#f0b429' },
-      horzLine: { color: '#f0b429', width: 1, style: 2, labelBackgroundColor: '#f0b429' },
-    },
-  });
+  if (rsiContainer) {
+    const rw = rsiContainer.offsetWidth || w;
+    rsiChart = LightweightCharts.createChart(rsiContainer, {
+      width:  rw,
+      height: 120,
+      layout: { background: { color: '#0a0b0e' }, textColor: '#8892a8', fontFamily: "'Space Mono', monospace", fontSize: 10 },
+      grid:   { vertLines: { color: '#1a1f2e', style: 1 }, horzLines: { color: '#1a1f2e', style: 1 } },
+      rightPriceScale: { borderColor: '#1f2535', scaleMargins: { top: 0.1, bottom: 0.1 } },
+      timeScale: { borderColor: '#1f2535', timeVisible: true, secondsVisible: false, visible: false },
+      crosshair: {
+        vertLine: { color: '#f0b429', width: 1, style: 2, labelBackgroundColor: '#f0b429' },
+        horzLine: { color: '#f0b429', width: 1, style: 2, labelBackgroundColor: '#f0b429' },
+      },
+    });
+    rsiSeries = rsiChart.addLineSeries({ color: '#b39ddb', lineWidth: 1.5, priceLineVisible: false, lastValueVisible: true });
+  }
 
-  rsiSeries = rsiChart.addLineSeries({ color: '#b39ddb', lineWidth: 1.5, priceLineVisible: false, lastValueVisible: true });
-
-  // RSI overbought/oversold lines
-  rsiChart.addLineSeries({ color: '#ef535044', lineWidth: 1, priceLineVisible: false, lastValueVisible: false })
-    .setData([]);
-  rsiChart.addLineSeries({ color: '#26a69a44', lineWidth: 1, priceLineVisible: false, lastValueVisible: false })
-    .setData([]);
-
-  // Sync crosshair between charts
+  /* Crosshair OHLC */
   chart.subscribeCrosshairMove(param => {
-    if (param.time) rsiChart.setCrosshairPosition(param.point?.x ?? 0, param.point?.y ?? 0, rsiSeries);
-    if (param.seriesData) {
-      const bar = param.seriesData.get(candleSeries);
-      if (bar) {
-        document.getElementById('metaO').textContent = fmt(bar.open);
-        document.getElementById('metaH').textContent = fmt(bar.high);
-        document.getElementById('metaL').textContent = fmt(bar.low);
-        document.getElementById('metaC').textContent = fmt(bar.close);
-      }
+    if (!param || !param.seriesData) return;
+    const bar = param.seriesData.get(candleSeries);
+    if (bar) {
+      document.getElementById('metaO').textContent = fmt(bar.open);
+      document.getElementById('metaH').textContent = fmt(bar.high);
+      document.getElementById('metaL').textContent = fmt(bar.low);
+      document.getElementById('metaC').textContent = fmt(bar.close);
     }
   });
 
-  // Sync time scales
-  chart.timeScale().subscribeVisibleTimeRangeChange(range => {
-    if (range) rsiChart.timeScale().setVisibleRange(range);
-  });
+  /* Sync time scales */
+  if (rsiChart) {
+    chart.timeScale().subscribeVisibleTimeRangeChange(range => {
+      if (range) rsiChart.timeScale().setVisibleRange(range);
+    });
+  }
 
+  /* Resize */
   const ro = new ResizeObserver(() => {
-    chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
-    rsiChart.applyOptions({ width: rsiContainer.clientWidth, height: rsiContainer.clientHeight });
+    if (chart && container) {
+      chart.applyOptions({ width: container.offsetWidth, height: container.offsetHeight });
+    }
+    if (rsiChart && rsiContainer) {
+      rsiChart.applyOptions({ width: rsiContainer.offsetWidth });
+    }
   });
   ro.observe(container);
-  ro.observe(rsiContainer);
+  if (rsiContainer) ro.observe(rsiContainer);
 }
 
 function bindControls() {
@@ -135,12 +148,20 @@ async function loadChart() {
 
   try {
     const res  = await fetch(`/api/ohlcv?symbol=${currentSymbol}&timeframe=${currentTimeframe}`);
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || 'Server error');
+    const text = await res.text();
 
-    if (!data.candles || !data.meta) throw new Error('Invalid data received from server');
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch(e) {
+      throw new Error('Server returned invalid response. Please refresh.');
+    }
+
+    if (!res.ok || data.error) throw new Error(data.error || 'Server error');
+    if (!data.candles || !data.meta) throw new Error('Incomplete data from server');
+
     renderCandles(data.candles);
-    renderEMAs(data.ema_lines || {ema20:[], ema50:[], ema200:[]});
+    renderEMAs(data.ema_lines || { ema20: [], ema50: [], ema200: [] });
     renderRSI(data.rsi || []);
     renderOrderBlocks(data.order_blocks || [], data.candles);
     renderSignals(data.signals || []);
@@ -149,9 +170,9 @@ async function loadChart() {
     updateSummaryPanel(data.summary || {}, data.signals || []);
 
     chart.timeScale().fitContent();
-    rsiChart.timeScale().fitContent();
+    if (rsiChart) rsiChart.timeScale().fitContent();
 
-    setStatus(`Loaded ${data.meta.bars} bars · ${data.meta.label} · ${currentTimeframe.toUpperCase()} · Bias: ${data.meta.bias.toUpperCase()}`);
+    setStatus(`Loaded ${data.meta.bars} bars · ${data.meta.label} · ${currentTimeframe.toUpperCase()} · Bias: ${(data.meta.bias || '—').toUpperCase()}`);
   } catch (err) {
     showError(err.message || 'Failed to fetch data');
     setStatus('Error — ' + err.message);
@@ -162,75 +183,69 @@ async function loadChart() {
 }
 
 function renderCandles(candles) {
+  if (!candleSeries || !candles.length) return;
   candleSeries.setData(candles.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
-  volumeSeries.setData(candles.map(c => ({
-    time: c.time, value: c.volume,
-    color: c.close >= c.open ? 'rgba(38,166,154,0.35)' : 'rgba(239,83,80,0.35)',
-  })));
+  if (volumeSeries) {
+    volumeSeries.setData(candles.map(c => ({
+      time: c.time, value: c.volume,
+      color: c.close >= c.open ? 'rgba(38,166,154,0.35)' : 'rgba(239,83,80,0.35)',
+    })));
+  }
 }
 
 function renderEMAs(emaLines) {
-  ema20Series.setData(emaLines.ema20);
-  ema50Series.setData(emaLines.ema50);
-  ema200Series.setData(emaLines.ema200);
+  if (!emaLines) return;
+  if (ema20Series  && emaLines.ema20)  ema20Series.setData(emaLines.ema20);
+  if (ema50Series  && emaLines.ema50)  ema50Series.setData(emaLines.ema50);
+  if (ema200Series && emaLines.ema200) ema200Series.setData(emaLines.ema200);
 }
 
 function renderRSI(rsiData) {
+  if (!rsiSeries || !rsiData || !rsiData.length) return;
   rsiSeries.setData(rsiData);
-  // Draw static 70/30 lines
-  const ob = rsiChart.addLineSeries({ color: '#ef535055', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
-  const os = rsiChart.addLineSeries({ color: '#26a69a55', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
-  if (rsiData.length > 0) {
+  if (rsiChart && rsiData.length > 1) {
     const first = rsiData[0].time;
     const last  = rsiData[rsiData.length - 1].time;
-    ob.setData([{ time: first, value: 70 }, { time: last, value: 70 }]);
-    os.setData([{ time: first, value: 30 }, { time: last, value: 30 }]);
+    try {
+      const ob = rsiChart.addLineSeries({ color: '#ef535055', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+      const os = rsiChart.addLineSeries({ color: '#26a69a55', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+      ob.setData([{ time: first, value: 70 }, { time: last, value: 70 }]);
+      os.setData([{ time: first, value: 30 }, { time: last, value: 30 }]);
+    } catch(e) {}
   }
 }
 
 function renderOrderBlocks(orderBlocks, candles) {
-  // Remove old OB series
   obSeries.forEach(s => { try { chart.removeSeries(s); } catch(e){} });
   obSeries = [];
+  if (!orderBlocks.length || !candles.length) return;
 
-  const lastTime  = candles[candles.length - 1].time;
-  const firstTime = candles[0].time;
+  const lastTime = candles[candles.length - 1].time;
 
   orderBlocks.forEach(ob => {
-    const color   = ob.type === 'bullish' ? 'rgba(38,166,154,0.18)' : 'rgba(239,83,80,0.18)';
-    const border  = ob.type === 'bullish' ? 'rgba(38,166,154,0.7)'  : 'rgba(239,83,80,0.7)';
+    try {
+      const color  = ob.type === 'bullish' ? 'rgba(38,166,154,0.18)' : 'rgba(239,83,80,0.18)';
+      const border = ob.type === 'bullish' ? 'rgba(38,166,154,0.7)'  : 'rgba(239,83,80,0.7)';
 
-    // Draw as a band using two lines with fill — approximate with area series
-    const series = chart.addAreaSeries({
-      topColor:     color,
-      bottomColor:  color,
-      lineColor:    border,
-      lineWidth:    1,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crossHairMarkerVisible: false,
-    });
+      const s = chart.addAreaSeries({
+        topColor: color, bottomColor: color, lineColor: border, lineWidth: 1,
+        priceLineVisible: false, lastValueVisible: false, crossHairMarkerVisible: false,
+      });
+      s.setData([{ time: ob.time, value: ob.top }, { time: lastTime, value: ob.top }]);
 
-    series.setData([
-      { time: ob.time,  value: ob.top    },
-      { time: lastTime, value: ob.top    },
-    ]);
+      const b = chart.addLineSeries({
+        color: border, lineWidth: 1, lineStyle: 1,
+        priceLineVisible: false, lastValueVisible: false, crossHairMarkerVisible: false,
+      });
+      b.setData([{ time: ob.time, value: ob.bottom }, { time: lastTime, value: ob.bottom }]);
 
-    // Bottom border line
-    const borderSeries = chart.addLineSeries({
-      color: border, lineWidth: 1, lineStyle: 1,
-      priceLineVisible: false, lastValueVisible: false, crossHairMarkerVisible: false,
-    });
-    borderSeries.setData([
-      { time: ob.time,  value: ob.bottom },
-      { time: lastTime, value: ob.bottom },
-    ]);
-
-    obSeries.push(series, borderSeries);
+      obSeries.push(s, b);
+    } catch(e) {}
   });
 }
 
 function renderSignals(signals) {
+  if (!candleSeries || !signals) return;
   const markers = signals.map(s => ({
     time:     s.time,
     position: s.type === 'buy' ? 'belowBar' : 'aboveBar',
@@ -238,16 +253,17 @@ function renderSignals(signals) {
     shape:    s.type === 'buy' ? 'arrowUp'  : 'arrowDown',
     text:     s.type.toUpperCase() + ' RSI:' + s.rsi,
   }));
-  candleSeries.setMarkers(markers);
+  try { candleSeries.setMarkers(markers); } catch(e) {}
 }
 
 function updatePriceStrip(meta) {
+  if (!meta) return;
   const priceEl  = document.getElementById('priceMain');
   const changeEl = document.getElementById('priceChange');
-  document.getElementById('pairLabel').textContent = meta.label;
+  document.getElementById('pairLabel').textContent = meta.label || '—';
   priceEl.textContent  = fmt(meta.last_price);
-  const up = meta.change_pct >= 0;
-  changeEl.textContent = (up ? '+' : '') + meta.change_pct.toFixed(3) + '%';
+  const up = (meta.change_pct || 0) >= 0;
+  changeEl.textContent = (up ? '+' : '') + (meta.change_pct || 0).toFixed(3) + '%';
   changeEl.className   = 'price-change ' + (up ? 'up' : 'down');
   priceEl.className    = 'price-main '   + (up ? 'up' : 'down');
   document.getElementById('metaC').textContent = fmt(meta.last_price);
@@ -257,61 +273,112 @@ function updatePriceStrip(meta) {
 }
 
 function updateAnalysisPanel(meta, orderBlocks, signals) {
-  const biasEl  = document.getElementById('biasBadge');
-  const rsiEl   = document.getElementById('rsiValue');
-  const obEl    = document.getElementById('obCount');
-  const sigEl   = document.getElementById('sigCount');
+  if (!meta) return;
+  const biasEl = document.getElementById('biasBadge');
+  const rsiEl  = document.getElementById('rsiValue');
+  const obEl   = document.getElementById('obCount');
+  const sigEl  = document.getElementById('sigCount');
   const lastSig = document.getElementById('lastSignal');
+  const htfEl  = document.getElementById('htfBadge');
 
-  biasEl.textContent  = meta.bias.toUpperCase();
-  biasEl.className    = 'badge ' + meta.bias;
-  const htfEl = document.getElementById('htfBadge');
-  if (htfEl) { htfEl.textContent = (data.htf_bias || 'neutral').toUpperCase(); htfEl.className = 'badge ' + (data.htf_bias || 'neutral'); }
-  rsiEl.textContent   = meta.last_rsi;
-  rsiEl.style.color   = meta.last_rsi > 70 ? '#ef5350' : meta.last_rsi < 30 ? '#26a69a' : '#e2e6f0';
-  obEl.textContent    = orderBlocks.length + ' zones';
-  sigEl.textContent   = signals.length + ' signals';
+  if (biasEl) { biasEl.textContent = (meta.bias || 'neutral').toUpperCase(); biasEl.className = 'badge ' + (meta.bias || 'neutral'); }
+  if (htfEl)  { htfEl.textContent  = '—'; }
+  if (rsiEl)  { rsiEl.textContent  = meta.last_rsi || '—'; rsiEl.style.color = meta.last_rsi > 70 ? '#ef5350' : meta.last_rsi < 30 ? '#26a69a' : '#e2e6f0'; }
+  if (obEl)   { obEl.textContent   = (orderBlocks.length) + ' zones'; }
+  if (sigEl)  { sigEl.textContent  = (signals.length) + ' signals'; }
 
-  if (signals.length > 0) {
-    const s = signals[signals.length - 1];
-    lastSig.textContent = s.type.toUpperCase() + ' @ ' + fmt(s.price);
-    lastSig.style.color = s.type === 'buy' ? '#26a69a' : '#ef5350';
-  } else {
-    lastSig.textContent = 'None';
-    lastSig.style.color = '#4a5470';
+  const htfData = window._lastHtf || 'neutral';
+  if (htfEl)  { htfEl.textContent = htfData.toUpperCase(); htfEl.className = 'badge ' + htfData; }
+
+  if (lastSig) {
+    if (signals.length > 0) {
+      const s = signals[signals.length - 1];
+      lastSig.textContent = s.type.toUpperCase() + ' @ ' + fmt(s.price);
+      lastSig.style.color = s.type === 'buy' ? '#26a69a' : '#ef5350';
+    } else {
+      lastSig.textContent = 'None';
+      lastSig.style.color = '#4a5470';
+    }
   }
+
+  const slTpBlock = document.getElementById('slTpBlock');
+  if (slTpBlock) {
+    if (signals.length > 0) {
+      const last = signals[signals.length - 1];
+      slTpBlock.style.display = 'block';
+      const slEl = document.getElementById('slValue');
+      const tpEl = document.getElementById('tpValue');
+      const rrEl = document.getElementById('rrValue');
+      if (slEl) slEl.textContent = fmt(last.sl);
+      if (tpEl) tpEl.textContent = fmt(last.tp);
+      if (rrEl) rrEl.textContent = '1:' + (last.rr || 2).toFixed(1);
+    } else {
+      slTpBlock.style.display = 'none';
+    }
+  }
+}
+
+function updateSummaryPanel(summary, signals) {
+  if (!summary) return;
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val || '—'; };
+  set('sumTrend', summary.trend);
+  set('sumRsi',   summary.rsi_desc);
+  set('sumOb',    summary.ob_desc);
+  set('sumSig',   summary.sig_desc);
+  set('sumRec',   summary.rec);
 }
 
 function fmt(val) {
   if (val === null || val === undefined) return '—';
   const n = parseFloat(val);
+  if (isNaN(n)) return '—';
   if (currentSymbol === 'XAUUSD') return n.toFixed(2);
   if (currentSymbol === 'USDJPY') return n.toFixed(3);
   return n.toFixed(5);
 }
 
-function showLoading(show) { document.getElementById('loadingOverlay').classList.toggle('hidden', !show); }
-function showError(msg)    { document.getElementById('errorMsg').textContent = msg; document.getElementById('errorOverlay').classList.remove('hidden'); }
-function hideError()       { document.getElementById('errorOverlay').classList.add('hidden'); }
-function setStatus(msg)    { document.getElementById('statusText').textContent = msg; }
+function showLoading(show) {
+  const el = document.getElementById('loadingOverlay');
+  if (el) el.classList.toggle('hidden', !show);
+}
+function showError(msg) {
+  const el  = document.getElementById('errorOverlay');
+  const msg_el = document.getElementById('errorMsg');
+  if (msg_el) msg_el.textContent = msg;
+  if (el) el.classList.remove('hidden');
+}
+function hideError() {
+  const el = document.getElementById('errorOverlay');
+  if (el) el.classList.add('hidden');
+}
+function setStatus(msg) {
+  const el = document.getElementById('statusText');
+  if (el) el.textContent = msg;
+}
 
 /* ── Phase 3: Summary + SL/TP panel ── */
 function updateSummaryPanel(summary, signals) {
   if (!summary) return;
-  document.getElementById('sumTrend').textContent = summary.trend    || '—';
-  document.getElementById('sumRsi').textContent   = summary.rsi_desc || '—';
-  document.getElementById('sumOb').textContent    = summary.ob_desc  || '—';
-  document.getElementById('sumSig').textContent   = summary.sig_desc || '—';
-  document.getElementById('sumRec').textContent   = summary.rec      || '—';
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val || '—'; };
+  set('sumTrend', summary.trend);
+  set('sumRsi',   summary.rsi_desc);
+  set('sumOb',    summary.ob_desc);
+  set('sumSig',   summary.sig_desc);
+  set('sumRec',   summary.rec);
 
   const slTpBlock = document.getElementById('slTpBlock');
-  if (signals && signals.length > 0) {
-    const last = signals[signals.length - 1];
-    slTpBlock.style.display = 'block';
-    document.getElementById('slValue').textContent = fmt(last.sl);
-    document.getElementById('tpValue').textContent = fmt(last.tp);
-    document.getElementById('rrValue').textContent = '1:' + last.rr.toFixed(1);
-  } else {
-    slTpBlock.style.display = 'none';
+  if (slTpBlock) {
+    if (signals && signals.length > 0) {
+      const last = signals[signals.length - 1];
+      slTpBlock.style.display = 'block';
+      const slEl = document.getElementById('slValue');
+      const tpEl = document.getElementById('tpValue');
+      const rrEl = document.getElementById('rrValue');
+      if (slEl) slEl.textContent = fmt(last.sl);
+      if (tpEl) tpEl.textContent = fmt(last.tp);
+      if (rrEl) rrEl.textContent = '1:' + (last.rr || 2).toFixed(1);
+    } else {
+      slTpBlock.style.display = 'none';
+    }
   }
 }
