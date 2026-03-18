@@ -14,17 +14,21 @@ let signalMarkers    = [];
 
 /* ── Init ── */
 document.addEventListener('DOMContentLoaded', () => {
-  initCharts();
-  bindControls();
-  loadChart();
+  // Small delay ensures DOM is fully painted before chart init
+  setTimeout(() => {
+    initCharts();
+    bindControls();
+    loadChart();
+  }, 100);
 });
 
 function initCharts() {
   const container = document.getElementById('chart');
 
+  const chartHeight = container.clientHeight || (window.innerHeight - 200);
   chart = LightweightCharts.createChart(container, {
-    width:  container.clientWidth,
-    height: container.clientHeight,
+    width:  container.clientWidth  || 800,
+    height: chartHeight,
     layout: { background: { color: '#0a0b0e' }, textColor: '#8892a8', fontFamily: "'Space Mono', monospace", fontSize: 11 },
     grid:   { vertLines: { color: '#1a1f2e', style: 1 }, horzLines: { color: '#1a1f2e', style: 1 } },
     crosshair: {
@@ -54,8 +58,8 @@ function initCharts() {
   /* RSI chart below */
   const rsiContainer = document.getElementById('rsiChart');
   rsiChart = LightweightCharts.createChart(rsiContainer, {
-    width:  rsiContainer.clientWidth,
-    height: rsiContainer.clientHeight,
+    width:  rsiContainer.clientWidth  || 800,
+    height: rsiContainer.clientHeight || 120,
     layout: { background: { color: '#0a0b0e' }, textColor: '#8892a8', fontFamily: "'Space Mono', monospace", fontSize: 10 },
     grid:   { vertLines: { color: '#1a1f2e', style: 1 }, horzLines: { color: '#1a1f2e', style: 1 } },
     rightPriceScale: { borderColor: '#1f2535', scaleMargins: { top: 0.1, bottom: 0.1 } },
