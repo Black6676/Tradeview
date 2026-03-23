@@ -247,7 +247,7 @@ function updateAnalysisPanel(meta, orderBlocks, signals) {
   if (lastSig) {
     if (signals.length > 0) {
       const s = signals[signals.length-1];
-      lastSig.textContent = s.type.toUpperCase() + ' @ ' + fmt(s.price);
+      lastSig.textContent = s.type.toUpperCase() + ' @ ' + fmt(s.price) + (s.confidence ? ' · ' + s.confidence + '%' : '');
       lastSig.style.color = s.type === 'buy' ? '#26a69a' : '#ef5350';
     } else { lastSig.textContent = 'None'; lastSig.style.color = '#4a5470'; }
   }

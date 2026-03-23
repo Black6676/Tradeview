@@ -273,14 +273,20 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                         and has_liq):
                     sl = round(ob["bottom"] - atr_val * 1.5, 5)
                     tp = round(price + (price - sl) * 2.0, 5)
-                    signals.append({
+                    buy_sig = {
                         "time":  ts, "type": "buy",
                         "price": round(price, 5),
                         "rsi":   round(rsi_val, 1),
                         "sl": sl, "tp": tp, "rr": 2.0,
                         "atr":   round(atr_val, 5),
                         "htf":   htf,
-                    })
+                    }
+                    buy_sig["confidence"] = compute_confidence(
+                        buy_sig,
+                        "bullish" if price > float(ema200.iloc[i]) else "bearish",
+                        rsi_val, htf
+                    )
+                    signals.append(buy_sig)
 
             # ── SELL confluence ────────────────────────────────
             elif ob["type"] == "bearish" and htf == "bearish":
@@ -290,14 +296,20 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                         and has_liq):
                     sl = round(ob["top"] + atr_val * 1.5, 5)
                     tp = round(price - (sl - price) * 2.0, 5)
-                    signals.append({
+                    sell_sig = {
                         "time":  ts, "type": "sell",
                         "price": round(price, 5),
                         "rsi":   round(rsi_val, 1),
                         "sl": sl, "tp": tp, "rr": 2.0,
                         "atr":   round(atr_val, 5),
                         "htf":   htf,
-                    })
+                    }
+                    sell_sig["confidence"] = compute_confidence(
+                        sell_sig,
+                        "bearish" if price < float(ema200.iloc[i]) else "bullish",
+                        rsi_val, htf
+                    )
+                    signals.append(sell_sig)
 
     # Deduplicate — minimum gap between signals
     deduped, last_ts = [], 0
@@ -444,6 +456,59 @@ def generate_ai_analysis(df, signals):
 
 
 
+
+# ══════════════════════════════════════════════════════════════
+# CONFIDENCE SCORE  (added by user)
+# ══════════════════════════════════════════════════════════════
+
+def compute_confidence(signal, trend, rsi_val, htf_bias):
+    """
+    Score a signal 0-100 based on confluence factors.
+      40pts — signal direction matches both LTF trend and HTF bias
+      30pts — RSI confirms momentum (>60 for buys, <40 for sells)
+      30pts — R:R is 2:1 or better
+    """
+    score = 0
+
+    # Trend + HTF alignment (strongest factor)
+    if signal["type"] == "buy"  and trend == "bullish" and htf_bias == "bullish":
+        score += 40
+    elif signal["type"] == "sell" and trend == "bearish" and htf_bias == "bearish":
+        score += 40
+    elif (signal["type"] == "buy"  and trend == "bullish") or          (signal["type"] == "sell" and trend == "bearish"):
+        score += 20   # partial credit — LTF only
+
+    # RSI momentum confirmation
+    if signal["type"] == "buy"  and rsi_val > 60:
+        score += 30
+    elif signal["type"] == "sell" and rsi_val < 40:
+        score += 30
+    elif 45 <= rsi_val <= 70 and signal["type"] == "buy":
+        score += 15
+    elif 30 <= rsi_val <= 55 and signal["type"] == "sell":
+        score += 15
+
+    # Risk/reward quality
+    if signal.get("rr", 0) >= 2:
+        score += 30
+
+    return min(score, 100)
+
+
+# ══════════════════════════════════════════════════════════════
+# AUTO TRADE EXECUTOR  (added by user — simulated)
+# ══════════════════════════════════════════════════════════════
+
+def execute_trade(signal):
+    """
+    Simulated trade executor.
+    Replace the print statements with your broker API calls
+    when you're ready to go live.
+    """
+    print(f"[TradeView] Executing {signal['type'].upper()} @ {signal['price']}")
+    print(f"  SL: {signal['sl']} | TP: {signal['tp']} | Confidence: {signal.get('confidence', '—')}%")
+    # TODO: replace with broker API call e.g. OANDA, Interactive Brokers, MT4 bridge
+
 # ══════════════════════════════════════════════════════════════
 # AI NARRATIVE ANALYSIS  (added by user)
 # ══════════════════════════════════════════════════════════════
@@ -554,6 +619,12 @@ def run_analysis(candles, symbol="EURUSD", timeframe="1h"):
     )
 
     ai_analysis = generate_ai_analysis(df, signals)
+
+    # Auto-execute best signal if confidence > 70
+    if signals:
+        best = max(signals, key=lambda x: x.get("confidence", 0))
+        if best.get("confidence", 0) > 70:
+            execute_trade(best)
 
     return {
         "ema_lines":    ema_lines,
