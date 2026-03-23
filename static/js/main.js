@@ -53,6 +53,9 @@ async function loadChart() {
     updatePriceStrip(data.meta);
     updateAnalysisPanel(data.meta, data.order_blocks || [], data.signals || []);
     updateSummaryPanel(data.summary || {}, data.signals || []);
+  const aiEl = document.getElementById('aiNarrative');
+  if (aiEl && data.ai_analysis) aiEl.textContent = data.ai_analysis;
+    updateAiNarrative(data.ai_analysis || '');
     setStatus(`Loaded ${data.meta.bars} bars · ${data.meta.label} · ${currentTimeframe.toUpperCase()} · Bias: ${(data.meta.bias||'—').toUpperCase()}`);
 
   } catch(err) {
@@ -280,3 +283,10 @@ function showLoading(show) { const el = document.getElementById('loadingOverlay'
 function showError(msg)    { const el = document.getElementById('errorOverlay'); const m = document.getElementById('errorMsg'); if (m) m.textContent = msg; if (el) el.classList.remove('hidden'); }
 function hideError()       { const el = document.getElementById('errorOverlay'); if (el) el.classList.add('hidden'); }
 function setStatus(msg)    { const el = document.getElementById('statusText'); if (el) el.textContent = msg; }
+
+function updateAiNarrative(text) {
+  const el = document.getElementById('aiNarrative');
+  if (!el) return;
+  el.textContent = text || '—';
+  el.style.whiteSpace = 'pre-line';
+}

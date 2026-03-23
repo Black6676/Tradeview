@@ -386,6 +386,120 @@ def generate_summary(bias, htf_bias, last_rsi, last_close, ema20, ema50, ema200,
     }
 
 
+
+# ══════════════════════════════════════════════════════════════
+# AI ANALYSIS NARRATIVE  (your addition)
+# ══════════════════════════════════════════════════════════════
+
+def generate_ai_analysis(df, signals):
+    """
+    Generates a plain-English market narrative combining trend,
+    momentum, volatility and recent signal bias.
+    """
+    if len(df) < 50:
+        return "Not enough data for analysis."
+
+    close      = df["close"]
+    ema50      = compute_ema(close, 50)
+    ema200     = compute_ema(close, 200)
+    last_price = float(close.iloc[-1])
+
+    # Trend
+    if ema50.iloc[-1] > ema200.iloc[-1]:
+        trend = "bullish"
+    elif ema50.iloc[-1] < ema200.iloc[-1]:
+        trend = "bearish"
+    else:
+        trend = "sideways"
+
+    # Momentum
+    rsi     = compute_rsi(close)
+    rsi_val = float(rsi.iloc[-1])
+    if rsi_val > 60:
+        momentum = "strong bullish momentum"
+    elif rsi_val < 40:
+        momentum = "strong bearish momentum"
+    else:
+        momentum = "weak / ranging momentum"
+
+    # Volatility
+    atr = compute_atr(df)
+    vol = float(atr.iloc[-1])
+
+    # Signal bias
+    last_signal = signals[-1]["type"] if signals else "none"
+
+    analysis = (
+        f"Market Analysis:\n"
+        f"- Current price: {round(last_price, 5)}\n"
+        f"- Trend: {trend}\n"
+        f"- Momentum: {momentum} (RSI: {round(rsi_val, 1)})\n"
+        f"- Volatility (ATR): {round(vol, 5)}\n"
+        f"Structure suggests a {trend} environment with {momentum}. "
+        f"Recent signals indicate: {last_signal} bias.\n"
+        f"Strategy: Look for confirmations in line with the dominant trend "
+        f"and avoid counter-trend trades unless strong reversals occur."
+    )
+    return analysis.strip()
+
+
+
+# ══════════════════════════════════════════════════════════════
+# AI NARRATIVE ANALYSIS  (added by user)
+# ══════════════════════════════════════════════════════════════
+
+def generate_ai_analysis(df, signals):
+    """
+    Generate a plain-English market narrative covering trend,
+    momentum, volatility and signal bias.
+    """
+    if len(df) < 50:
+        return "Not enough data for analysis."
+
+    close  = df["close"]
+    ema50  = compute_ema(close, 50)
+    ema200 = compute_ema(close, 200)
+    last_price = float(close.iloc[-1])
+
+    # Trend
+    if ema50.iloc[-1] > ema200.iloc[-1]:
+        trend = "bullish"
+    elif ema50.iloc[-1] < ema200.iloc[-1]:
+        trend = "bearish"
+    else:
+        trend = "sideways"
+
+    # Momentum
+    rsi     = compute_rsi(close)
+    rsi_val = float(rsi.iloc[-1])
+    if rsi_val > 60:
+        momentum = "strong bullish momentum"
+    elif rsi_val < 40:
+        momentum = "strong bearish momentum"
+    else:
+        momentum = "weak / ranging momentum"
+
+    # Volatility
+    atr = compute_atr(df)
+    vol = float(atr.iloc[-1])
+
+    # Signal bias
+    last_signal = signals[-1]["type"] if signals else "none"
+
+    # Narrative
+    analysis = (
+        f"Market Analysis:\n"
+        f"- Current price: {round(last_price, 5)}\n"
+        f"- Trend: {trend}\n"
+        f"- Momentum: {momentum} (RSI: {round(rsi_val, 1)})\n"
+        f"- Volatility (ATR): {round(vol, 5)}\n"
+        f"Structure suggests a {trend} environment with {momentum}. "
+        f"Recent signals indicate: {last_signal} bias.\n"
+        f"Strategy: Look for confirmations in line with the dominant trend "
+        f"and avoid counter-trend trades unless strong reversals occur."
+    )
+    return analysis.strip()
+
 # ══════════════════════════════════════════════════════════════
 # MAIN RUNNER  (called by app.py and scanner.py)
 # ══════════════════════════════════════════════════════════════
@@ -439,6 +553,8 @@ def run_analysis(candles, symbol="EURUSD", timeframe="1h"):
         display_obs, signals, symbol, timeframe
     )
 
+    ai_analysis = generate_ai_analysis(df, signals)
+
     return {
         "ema_lines":    ema_lines,
         "rsi":          rsi_line,
@@ -448,4 +564,5 @@ def run_analysis(candles, symbol="EURUSD", timeframe="1h"):
         "htf_bias":     htf_bias,
         "last_rsi":     round(last_rsi, 1),
         "summary":      summary,
+        "ai_analysis":  ai_analysis,
     }

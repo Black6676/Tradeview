@@ -77,7 +77,7 @@ def get_ohlcv():
             "bias": analysis["bias"], "last_rsi": analysis["last_rsi"]},
             "candles": candles, "ema_lines": analysis["ema_lines"], "rsi": analysis["rsi"],
             "order_blocks": analysis["order_blocks"], "signals": analysis["signals"],
-            "summary": analysis["summary"], "htf_bias": analysis.get("htf_bias", "neutral")})
+            "summary": analysis["summary"], "htf_bias": analysis.get("htf_bias", "neutral"), "ai_analysis": analysis.get("ai_analysis", "")})
     except requests.exceptions.Timeout:
         return jsonify({"error": "Request timed out"}), 504
     except Exception as e:
