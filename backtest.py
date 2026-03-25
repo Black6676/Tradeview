@@ -2,7 +2,8 @@ import pandas as pd
 import numpy as np
 from algorithm import (compute_ema, compute_rsi, compute_atr,
                        detect_order_blocks, get_htf_bias,
-                       detect_swings, detect_structure_breaks, detect_liquidity)
+                       detect_swings, detect_structure_breaks, detect_liquidity,
+                       is_trading_session, lot_size)
 
 
 def run_backtest(candles, symbol="EURUSD"):
@@ -82,26 +83,30 @@ def run_backtest(candles, symbol="EURUSD"):
             if ob["type"] == "bullish" and htf == "bullish":
                 if (in_zone and price > e200
                         and 45 <= rsi_val <= 70
-                        and has_bull_bos and has_liq):
+                        and has_bull_bos and has_liq
+                        and is_trading_session(ts)):
                     sl = round(ob["bottom"] - atr_val * 1.5, 5)
                     tp = round(price + (price - sl) * 2.0, 5)
                     current_trade = {
                         "type": "buy", "entry_price": price, "entry_time": ts,
                         "sl": sl, "tp": tp, "rr": 2.0,
                         "rsi": round(rsi_val, 1), "htf": htf,
+                        "lot": lot_size(round(price - sl, 5)),
                     }
                     in_trade = True; break
 
             elif ob["type"] == "bearish" and htf == "bearish":
                 if (in_zone and price < e200
                         and 30 <= rsi_val <= 55
-                        and has_bear_bos and has_liq):
+                        and has_bear_bos and has_liq
+                        and is_trading_session(ts)):
                     sl = round(ob["top"] + atr_val * 1.5, 5)
                     tp = round(price - (sl - price) * 2.0, 5)
                     current_trade = {
                         "type": "sell", "entry_price": price, "entry_time": ts,
                         "sl": sl, "tp": tp, "rr": 2.0,
                         "rsi": round(rsi_val, 1), "htf": htf,
+                        "lot": lot_size(round(sl - price, 5)),
                     }
                     in_trade = True; break
 
@@ -165,6 +170,7 @@ def run_backtest(candles, symbol="EURUSD"):
         "result":      t["result"],
         "pnl_r":       t["pnl_r"],
         "rsi":         t["rsi"],
+        "lot":         t.get("lot", 0.01),
     } for t in trades]
 
     return {"stats": stats, "equity": equity, "trades": trade_log}

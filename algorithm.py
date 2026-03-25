@@ -30,6 +30,105 @@ def compute_atr(df, period=14):
     return tr.ewm(span=period, adjust=False).mean()
 
 
+
+# ══════════════════════════════════════════════════════════════
+# RISK MANAGEMENT & SESSION FILTER  (merged from user version)
+# ══════════════════════════════════════════════════════════════
+
+# Global settings — adjust these to match your account
+ACCOUNT_BALANCE       = 1000   # your account size in USD
+RISK_PER_TRADE        = 0.01   # 1% risk per trade
+MAX_TRADES_PER_DAY    = 3      # max signals to act on per day
+CONFIDENCE_THRESHOLD  = 70     # minimum confidence to fire a signal
+
+# Trade history for adaptive learning
+_trade_history = []
+
+
+def is_trading_session(ts):
+    """
+    Only trade during active market hours (7am–8pm UTC).
+    Avoids low-liquidity dead zones where signals are unreliable.
+    """
+    from datetime import datetime, timezone
+    hour = datetime.fromtimestamp(ts, tz=timezone.utc).hour
+    return 7 <= hour <= 20
+
+
+def lot_size(sl_distance, account_balance=None, risk_pct=None):
+    """
+    Calculate position size based on fixed risk percentage.
+    risk = account_balance * risk_pct
+    lot  = risk / (sl_distance_in_pips * pip_value)
+    Minimum lot: 0.01
+    """
+    balance  = account_balance or ACCOUNT_BALANCE
+    risk_pct = risk_pct or RISK_PER_TRADE
+    risk     = balance * risk_pct
+    if sl_distance <= 0:
+        return 0.01
+    lot = risk / (sl_distance * 100)
+    return round(max(lot, 0.01), 2)
+
+
+def apply_trade_management(trade, current_price):
+    """
+    Break-even + trailing stop logic.
+    Once price moves 1R in our favour, move SL to entry (break-even).
+    Then trail SL at 50% of the remaining distance to TP.
+    """
+    entry = trade["entry_price"]
+    sl    = trade["sl"]
+    tp    = trade["tp"]
+    risk  = abs(entry - sl)
+
+    if trade["type"] == "buy":
+        # Break-even
+        if current_price - entry >= risk:
+            trade["sl"] = max(sl, entry)
+        # Trailing stop
+        trade["sl"] = max(trade["sl"], current_price - 0.5 * abs(tp - entry))
+
+    elif trade["type"] == "sell":
+        # Break-even
+        if entry - current_price >= risk:
+            trade["sl"] = min(sl, entry)
+        # Trailing stop
+        trade["sl"] = min(trade["sl"], current_price + 0.5 * abs(entry - tp))
+
+    return trade
+
+
+def adapt_strategy():
+    """
+    Self-adjusting confidence threshold based on recent win rate.
+    Win rate < 40% → raise threshold (be more selective)
+    Win rate > 60% → lower threshold (take more trades)
+    Clamped between 60 and 90.
+    """
+    global CONFIDENCE_THRESHOLD
+
+    if len(_trade_history) < 10:
+        return
+
+    wins = sum(1 for t in _trade_history if t.get("result") == "win")
+    rate = wins / len(_trade_history)
+
+    if rate < 0.4:
+        CONFIDENCE_THRESHOLD = min(90, CONFIDENCE_THRESHOLD + 5)
+        print(f"[Adaptive] Win rate low ({rate:.0%}) — raising threshold to {CONFIDENCE_THRESHOLD}")
+    elif rate > 0.6:
+        CONFIDENCE_THRESHOLD = max(60, CONFIDENCE_THRESHOLD - 5)
+        print(f"[Adaptive] Win rate high ({rate:.0%}) — lowering threshold to {CONFIDENCE_THRESHOLD}")
+
+
+def record_trade_result(signal, result):
+    """Call this after a trade closes to feed the adaptive system."""
+    _trade_history.append({**signal, "result": result})
+    if len(_trade_history) > 50:
+        _trade_history.pop(0)
+    adapt_strategy()
+
 # ══════════════════════════════════════════════════════════════
 # HTF BIAS  (4H resampling — works with 500 x 1H bars)
 # ══════════════════════════════════════════════════════════════
@@ -270,9 +369,11 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                 if (in_zone and price > e200
                         and 45 <= rsi_val <= 70
                         and has_bull_bos
-                        and has_liq):
+                        and has_liq
+                        and is_trading_session(ts)):
                     sl = round(ob["bottom"] - atr_val * 1.5, 5)
                     tp = round(price + (price - sl) * 2.0, 5)
+                    sl_distance = round(price - sl, 5)
                     buy_sig = {
                         "time":  ts, "type": "buy",
                         "price": round(price, 5),
@@ -280,22 +381,26 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                         "sl": sl, "tp": tp, "rr": 2.0,
                         "atr":   round(atr_val, 5),
                         "htf":   htf,
+                        "lot":   lot_size(sl_distance),
                     }
                     buy_sig["confidence"] = compute_confidence(
                         buy_sig,
                         "bullish" if price > float(ema200.iloc[i]) else "bearish",
                         rsi_val, htf
                     )
-                    signals.append(buy_sig)
+                    if buy_sig["confidence"] >= CONFIDENCE_THRESHOLD:
+                        signals.append(buy_sig)
 
             # ── SELL confluence ────────────────────────────────
             elif ob["type"] == "bearish" and htf == "bearish":
                 if (in_zone and price < e200
                         and 30 <= rsi_val <= 55
                         and has_bear_bos
-                        and has_liq):
+                        and has_liq
+                        and is_trading_session(ts)):
                     sl = round(ob["top"] + atr_val * 1.5, 5)
                     tp = round(price - (sl - price) * 2.0, 5)
+                    sl_distance = round(sl - price, 5)
                     sell_sig = {
                         "time":  ts, "type": "sell",
                         "price": round(price, 5),
@@ -303,13 +408,15 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                         "sl": sl, "tp": tp, "rr": 2.0,
                         "atr":   round(atr_val, 5),
                         "htf":   htf,
+                        "lot":   lot_size(sl_distance),
                     }
                     sell_sig["confidence"] = compute_confidence(
                         sell_sig,
                         "bearish" if price < float(ema200.iloc[i]) else "bullish",
                         rsi_val, htf
                     )
-                    signals.append(sell_sig)
+                    if sell_sig["confidence"] >= CONFIDENCE_THRESHOLD:
+                        signals.append(sell_sig)
 
     # Deduplicate — minimum gap between signals
     deduped, last_ts = [], 0
@@ -499,15 +606,132 @@ def compute_confidence(signal, trend, rsi_val, htf_bias):
 # AUTO TRADE EXECUTOR  (added by user — simulated)
 # ══════════════════════════════════════════════════════════════
 
-def execute_trade(signal):
+def execute_trade(signal, symbol="XAUUSD", lot=0.01, use_mt5=False):
     """
-    Simulated trade executor.
-    Replace the print statements with your broker API calls
-    when you're ready to go live.
+    Trade executor — two modes:
+      use_mt5=False (default): simulation only, prints to console
+      use_mt5=True           : sends real order to MetaTrader 5 (Windows only)
+    CAUTION: Always test on a demo account before going live.
     """
-    print(f"[TradeView] Executing {signal['type'].upper()} @ {signal['price']}")
-    print(f"  SL: {signal['sl']} | TP: {signal['tp']} | Confidence: {signal.get('confidence', '—')}%")
-    # TODO: replace with broker API call e.g. OANDA, Interactive Brokers, MT4 bridge
+    confidence = signal.get("confidence", 0)
+    print(f"[TradeView] {signal['type'].upper()} @ {signal['price']} | "
+          f"SL: {signal['sl']} | TP: {signal['tp']} | Confidence: {confidence}%")
+
+    if use_mt5:
+        return execute_trade_mt5(signal, symbol=symbol, lot=lot)
+    else:
+        print("[TradeView] Simulation mode — set use_mt5=True to send real orders")
+        return None
+
+
+# ══════════════════════════════════════════════════════════════
+# METATRADER 5 INTEGRATION  (Windows only — local execution)
+# ══════════════════════════════════════════════════════════════
+
+def fetch_live_data_mt5(symbol="XAUUSD", timeframe=None, n=300):
+    """
+    Fetch live OHLCV data directly from MetaTrader 5.
+    Falls back to Twelve Data API if MT5 is unavailable.
+    Requires: pip install MetaTrader5
+    Only works on Windows with MT5 installed and logged in.
+    """
+    try:
+        import MetaTrader5 as mt5
+
+        # Use M5 as default if no timeframe passed
+        tf = timeframe if timeframe is not None else mt5.TIMEFRAME_M5
+
+        if not mt5.initialize():
+            print("[MT5] Initialization failed — falling back to API")
+            return []
+
+        rates = mt5.copy_rates_from_pos(symbol, tf, 0, n)
+        mt5.shutdown()
+
+        if rates is None or len(rates) == 0:
+            print("[MT5] No data received")
+            return []
+
+        candles = []
+        for r in rates:
+            candles.append({
+                "time":  int(r["time"]),
+                "open":  float(r["open"]),
+                "high":  float(r["high"]),
+                "low":   float(r["low"]),
+                "close": float(r["close"]),
+                "volume": float(r.get("tick_volume", 0)),
+            })
+        return candles
+
+    except ImportError:
+        print("[MT5] MetaTrader5 package not installed. Run: pip install MetaTrader5")
+        return []
+    except Exception as e:
+        print(f"[MT5] Error fetching data: {e}")
+        return []
+
+
+def execute_trade_mt5(signal, symbol="XAUUSD", lot=0.01):
+    """
+    Send a live trade to MetaTrader 5.
+    CAUTION: This places REAL trades with REAL money.
+    Test on a demo account first.
+    Requires: pip install MetaTrader5
+    Only works on Windows with MT5 installed and logged in.
+    """
+    try:
+        import MetaTrader5 as mt5
+
+        if not mt5.initialize():
+            print("[MT5] Initialization failed — trade not sent")
+            return None
+
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            print(f"[MT5] Could not get tick for {symbol}")
+            mt5.shutdown()
+            return None
+
+        if signal["type"] == "buy":
+            price      = tick.ask
+            order_type = mt5.ORDER_TYPE_BUY
+        else:
+            price      = tick.bid
+            order_type = mt5.ORDER_TYPE_SELL
+
+        request = {
+            "action":      mt5.TRADE_ACTION_DEAL,
+            "symbol":      symbol,
+            "volume":      lot,
+            "type":        order_type,
+            "price":       price,
+            "sl":          signal["sl"],
+            "tp":          signal["tp"],
+            "deviation":   10,
+            "magic":       123456,
+            "comment":     f"TradeView AI | Confidence: {signal.get('confidence', '—')}%",
+            "type_time":   mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+
+        result = mt5.order_send(request)
+        mt5.shutdown()
+
+        if result.retcode == mt5.TRADE_RETCODE_DONE:
+            print(f"[MT5] ✓ Trade executed: {signal['type'].upper()} {symbol} @ {price}")
+            print(f"      SL: {signal['sl']} | TP: {signal['tp']} | Lot: {lot}")
+        else:
+            print(f"[MT5] ✗ Trade failed. Retcode: {result.retcode} — {result.comment}")
+
+        return result
+
+    except ImportError:
+        print("[MT5] MetaTrader5 package not installed. Run: pip install MetaTrader5")
+        return None
+    except Exception as e:
+        print(f"[MT5] Error executing trade: {e}")
+        return None
 
 # ══════════════════════════════════════════════════════════════
 # AI NARRATIVE ANALYSIS  (added by user)
@@ -620,11 +844,11 @@ def run_analysis(candles, symbol="EURUSD", timeframe="1h"):
 
     ai_analysis = generate_ai_analysis(df, signals)
 
-    # Auto-execute best signal if confidence > 70
+    # Auto-execute best signal if it meets adaptive confidence threshold
     if signals:
         best = max(signals, key=lambda x: x.get("confidence", 0))
-        if best.get("confidence", 0) > 70:
-            execute_trade(best)
+        if best.get("confidence", 0) >= CONFIDENCE_THRESHOLD:
+            execute_trade(best, symbol=symbol, lot=best.get("lot", 0.01))
 
     return {
         "ema_lines":    ema_lines,

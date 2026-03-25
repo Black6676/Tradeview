@@ -141,6 +141,7 @@ function renderTradeLog(trades) {
       <td>${t.sl}</td>
       <td>${t.tp}</td>
       <td>${t.rsi}</td>
+      <td>${t.lot || 0.01}</td>
       <td>${t.result.toUpperCase()}</td>
       <td class="${pnlClass}">${pnlText}</td>
     `;
