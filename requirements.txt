@@ -4,3 +4,4 @@ pandas
 requests
 gunicorn
 numpy
+scipy

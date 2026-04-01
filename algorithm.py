@@ -1,6 +1,12 @@
 import pandas as pd
 import numpy as np
 
+try:
+    from scipy.signal import argrelextrema
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+
 
 # ══════════════════════════════════════════════════════════════
 # INDICATORS
@@ -30,38 +36,26 @@ def compute_atr(df, period=14):
     return tr.ewm(span=period, adjust=False).mean()
 
 
-
 # ══════════════════════════════════════════════════════════════
-# RISK MANAGEMENT & SESSION FILTER  (merged from user version)
+# RISK MANAGEMENT & SESSION FILTER
 # ══════════════════════════════════════════════════════════════
 
-# Global settings — adjust these to match your account
-ACCOUNT_BALANCE       = 1000   # your account size in USD
-RISK_PER_TRADE        = 0.01   # 1% risk per trade
-MAX_TRADES_PER_DAY    = 3      # max signals to act on per day
-CONFIDENCE_THRESHOLD  = 70     # minimum confidence to fire a signal
+ACCOUNT_BALANCE      = 1000
+RISK_PER_TRADE       = 0.01
+MAX_TRADES_PER_DAY   = 3
+CONFIDENCE_THRESHOLD = 65
 
-# Trade history for adaptive learning
 _trade_history = []
 
 
 def is_trading_session(ts):
-    """
-    Only trade during active market hours (7am–8pm UTC).
-    Avoids low-liquidity dead zones where signals are unreliable.
-    """
+    """London/NY overlap only — 12:00–20:00 UTC."""
     from datetime import datetime, timezone
     hour = datetime.fromtimestamp(ts, tz=timezone.utc).hour
-    return 7 <= hour <= 20
+    return 12 <= hour <= 20
 
 
 def lot_size(sl_distance, account_balance=None, risk_pct=None):
-    """
-    Calculate position size based on fixed risk percentage.
-    risk = account_balance * risk_pct
-    lot  = risk / (sl_distance_in_pips * pip_value)
-    Minimum lot: 0.01
-    """
     balance  = account_balance or ACCOUNT_BALANCE
     risk_pct = risk_pct or RISK_PER_TRADE
     risk     = balance * risk_pct
@@ -72,273 +66,229 @@ def lot_size(sl_distance, account_balance=None, risk_pct=None):
 
 
 def apply_trade_management(trade, current_price):
-    """
-    Break-even + trailing stop logic.
-    Once price moves 1R in our favour, move SL to entry (break-even).
-    Then trail SL at 50% of the remaining distance to TP.
-    """
     entry = trade["entry_price"]
     sl    = trade["sl"]
     tp    = trade["tp"]
     risk  = abs(entry - sl)
-
+    atr   = trade.get("atr", 0)
     if trade["type"] == "buy":
-        # Break-even
         if current_price - entry >= risk:
             trade["sl"] = max(sl, entry)
-        # Trailing stop
-        trade["sl"] = max(trade["sl"], current_price - 0.5 * abs(tp - entry))
-
+        trade["sl"] = max(trade["sl"], current_price - 1.5 * atr)
     elif trade["type"] == "sell":
-        # Break-even
         if entry - current_price >= risk:
             trade["sl"] = min(sl, entry)
-        # Trailing stop
-        trade["sl"] = min(trade["sl"], current_price + 0.5 * abs(entry - tp))
-
+        trade["sl"] = min(trade["sl"], current_price + 1.5 * atr)
     return trade
 
 
 def adapt_strategy():
-    """
-    Self-adjusting confidence threshold based on recent win rate.
-    Win rate < 40% → raise threshold (be more selective)
-    Win rate > 60% → lower threshold (take more trades)
-    Clamped between 60 and 90.
-    """
     global CONFIDENCE_THRESHOLD
-
     if len(_trade_history) < 10:
         return
-
     wins = sum(1 for t in _trade_history if t.get("result") == "win")
     rate = wins / len(_trade_history)
-
     if rate < 0.4:
         CONFIDENCE_THRESHOLD = min(90, CONFIDENCE_THRESHOLD + 5)
-        print(f"[Adaptive] Win rate low ({rate:.0%}) — raising threshold to {CONFIDENCE_THRESHOLD}")
     elif rate > 0.6:
         CONFIDENCE_THRESHOLD = max(60, CONFIDENCE_THRESHOLD - 5)
-        print(f"[Adaptive] Win rate high ({rate:.0%}) — lowering threshold to {CONFIDENCE_THRESHOLD}")
 
 
 def record_trade_result(signal, result):
-    """Call this after a trade closes to feed the adaptive system."""
     _trade_history.append({**signal, "result": result})
     if len(_trade_history) > 50:
         _trade_history.pop(0)
     adapt_strategy()
 
+
 # ══════════════════════════════════════════════════════════════
-# HTF BIAS  (4H resampling — works with 500 x 1H bars)
+# HTF BIAS
 # ══════════════════════════════════════════════════════════════
 
 def get_htf_bias(df):
-    """
-    Resample input data to 4H candles and derive trend bias
-    from EMA20 vs EMA50 relationship.
-    Returns dict: {date -> 'bullish'|'bearish'|'neutral'}
-    """
     df2 = df.copy()
     df2["datetime"] = pd.to_datetime(df2["time"], unit="s", utc=True)
     df2 = df2.set_index("datetime")
-
     h4 = df2[["open","high","low","close"]].resample("4h").agg({
-        "open":  "first",
-        "high":  "max",
-        "low":   "min",
-        "close": "last",
+        "open":"first","high":"max","low":"min","close":"last"
     }).dropna()
-
     if len(h4) < 25:
         return {}
-
     h4_ema20 = compute_ema(h4["close"], 20)
     h4_ema50 = compute_ema(h4["close"], 50)
-
     bias_map = {}
     for dt in h4.index:
         close = h4.loc[dt, "close"]
         e20   = h4_ema20.loc[dt]
         e50   = h4_ema50.loc[dt]
-        if close > e20 and e20 > e50:
-            bias = "bullish"
-        elif close < e20 and e20 < e50:
-            bias = "bearish"
-        else:
-            bias = "neutral"
-        # Tag every hour in this 4H window with this bias
+        bias  = "bullish" if close > e20 > e50 else "bearish" if close < e20 < e50 else "neutral"
         for h in range(4):
             key = (dt + pd.Timedelta(hours=h)).date()
             bias_map[key] = bias
-
     return bias_map
 
 
 # ══════════════════════════════════════════════════════════════
-# MARKET STRUCTURE  (merged from your version)
+# MARKET STRUCTURE
 # ══════════════════════════════════════════════════════════════
 
 def detect_swings(df, lookback=5):
-    """Identify swing highs and swing lows."""
     highs = df["high"].values
     lows  = df["low"].values
+    if SCIPY_AVAILABLE:
+        try:
+            order = max(2, lookback)
+            sh_idx = argrelextrema(highs, np.greater_equal, order=order)[0]
+            sl_idx = argrelextrema(lows,  np.less_equal,    order=order)[0]
+            swing_highs = [(i, highs[i]) for i in sh_idx if lookback <= i < len(df) - lookback]
+            swing_lows  = [(i, lows[i])  for i in sl_idx if lookback <= i < len(df) - lookback]
+            return swing_highs, swing_lows
+        except Exception:
+            pass
     swing_highs, swing_lows = [], []
-
     for i in range(lookback, len(df) - lookback):
         if highs[i] == max(highs[i - lookback:i + lookback + 1]):
             swing_highs.append((i, highs[i]))
-        if lows[i]  == min(lows[i  - lookback:i + lookback + 1]):
+        if lows[i] == min(lows[i - lookback:i + lookback + 1]):
             swing_lows.append((i, lows[i]))
-
     return swing_highs, swing_lows
 
 
 def detect_structure_breaks(swing_highs, swing_lows):
-    """
-    Break of Structure (BOS):
-      Bullish BOS = new swing high above previous swing high
-      Bearish BOS = new swing low below previous swing low
-    """
     breaks = []
-
     for i in range(1, len(swing_highs)):
         if swing_highs[i][1] > swing_highs[i - 1][1]:
-            breaks.append({"type": "bullish_bos", "idx": swing_highs[i][0],
-                           "level": swing_highs[i][1]})
-
+            breaks.append({"type": "bullish_bos", "idx": swing_highs[i][0], "level": swing_highs[i][1]})
     for i in range(1, len(swing_lows)):
         if swing_lows[i][1] < swing_lows[i - 1][1]:
-            breaks.append({"type": "bearish_bos", "idx": swing_lows[i][0],
-                           "level": swing_lows[i][1]})
-
+            breaks.append({"type": "bearish_bos", "idx": swing_lows[i][0], "level": swing_lows[i][1]})
     return breaks
 
 
 # ══════════════════════════════════════════════════════════════
-# LIQUIDITY DETECTION  (merged from your version)
+# LIQUIDITY & FVG
 # ══════════════════════════════════════════════════════════════
 
 def detect_liquidity(df, threshold=0.0005):
-    """
-    Equal highs / equal lows = liquidity pools.
-    Threshold scales with price for Gold (XAU).
-    """
-    highs = df["high"].values
-    lows  = df["low"].values
-    avg_price = float(df["close"].mean())
-
-    # Scale threshold for higher-priced instruments (Gold ~2000 vs Forex ~1.1)
-    scaled_threshold = threshold * max(1.0, avg_price / 2.0)
-
-    liquidity = []
+    highs      = df["high"].values
+    lows       = df["low"].values
+    avg_price  = float(df["close"].mean())
+    scaled_thr = threshold * max(1.0, avg_price / 2.0)
+    liquidity  = []
     for i in range(1, len(df)):
-        if abs(highs[i] - highs[i - 1]) < scaled_threshold:
-            liquidity.append({"type": "equal_highs", "idx": i,
-                              "level": highs[i]})
-        if abs(lows[i]  - lows[i - 1])  < scaled_threshold:
-            liquidity.append({"type": "equal_lows",  "idx": i,
-                              "level": lows[i]})
-
+        if abs(highs[i] - highs[i - 1]) < scaled_thr:
+            liquidity.append({"type": "equal_highs", "idx": i, "level": highs[i]})
+        if abs(lows[i]  - lows[i - 1])  < scaled_thr:
+            liquidity.append({"type": "equal_lows",  "idx": i, "level": lows[i]})
     return liquidity
 
 
+def detect_fvg(df):
+    """Fair Value Gaps — stores candle index for accurate recency checks."""
+    fvgs = []
+    for i in range(2, len(df) - 1):
+        if df["low"].iloc[i] > df["high"].iloc[i - 2]:
+            fvgs.append({"idx": i, "time": int(df["time"].iloc[i - 1]),
+                         "top": float(df["low"].iloc[i]), "bottom": float(df["high"].iloc[i - 2]),
+                         "type": "bullish"})
+        elif df["high"].iloc[i] < df["low"].iloc[i - 2]:
+            fvgs.append({"idx": i, "time": int(df["time"].iloc[i - 1]),
+                         "top": float(df["low"].iloc[i - 2]), "bottom": float(df["high"].iloc[i]),
+                         "type": "bearish"})
+    return fvgs
+
+
 # ══════════════════════════════════════════════════════════════
-# ORDER BLOCKS
+# ORDER BLOCKS  (volume + mitigation fix)
 # ══════════════════════════════════════════════════════════════
 
 def detect_order_blocks(df, lookback=10):
-    """
-    Full dataset scan for bullish and bearish order blocks.
-    Impulse threshold: 1.2× ATR.
-    Returns (bull_obs, bear_obs) separately so callers can filter.
-    """
     atr    = compute_atr(df)
     opens  = df["open"].values
     closes = df["close"].values
     highs  = df["high"].values
     lows   = df["low"].values
     times  = df["time"].values
+    volumes = df["volume"].values if "volume" in df.columns and df["volume"].sum() > 0 else np.ones(len(df))
     bull_obs, bear_obs = [], []
 
     for i in range(lookback, len(df) - 1):
-        body      = abs(closes[i] - opens[i])
-        threshold = 1.2 * atr.iloc[i]
+        body       = abs(closes[i] - opens[i])
+        threshold  = 1.2 * atr.iloc[i]
+        vol_avg    = np.mean(volumes[max(0, i - lookback):i + 1])
+        vol_strong = volumes[i] > vol_avg * 1.2 if vol_avg > 0 else True
 
-        if closes[i] > opens[i] and body > threshold:
+        if closes[i] > opens[i] and body > threshold and vol_strong:
             for j in range(i - 1, max(i - lookback, 0) - 1, -1):
                 if closes[j] < opens[j]:
-                    bull_obs.append({
-                        "time":   int(times[j]),
-                        "top":    round(float(opens[j]),  5),
-                        "bottom": round(float(closes[j]), 5),
-                        "type":   "bullish",
-                        "high":   round(float(highs[j]),  5),
-                        "low":    round(float(lows[j]),   5),
-                        "atr":    round(float(atr.iloc[j]), 5),
-                        "signal_idx": i,
-                    })
+                    ob_top = float(max(opens[j], closes[j]))
+                    ob_bot = float(min(opens[j], closes[j]))
+                    mitigated = any(ob_bot <= p <= ob_top for p in closes[j + 1:i])
+                    if mitigated or (i - j <= 5):
+                        bull_obs.append({"time": int(times[j]), "top": round(ob_top, 5),
+                            "bottom": round(ob_bot, 5), "type": "bullish",
+                            "high": round(float(highs[j]), 5), "low": round(float(lows[j]), 5),
+                            "atr": round(float(atr.iloc[j]), 5), "signal_idx": i})
                     break
 
-        if closes[i] < opens[i] and body > threshold:
+        if closes[i] < opens[i] and body > threshold and vol_strong:
             for j in range(i - 1, max(i - lookback, 0) - 1, -1):
                 if closes[j] > opens[j]:
-                    bear_obs.append({
-                        "time":   int(times[j]),
-                        "top":    round(float(closes[j]), 5),
-                        "bottom": round(float(opens[j]),  5),
-                        "type":   "bearish",
-                        "high":   round(float(highs[j]),  5),
-                        "low":    round(float(lows[j]),   5),
-                        "atr":    round(float(atr.iloc[j]), 5),
-                        "signal_idx": i,
-                    })
+                    ob_top = float(max(opens[j], closes[j]))
+                    ob_bot = float(min(opens[j], closes[j]))
+                    mitigated = any(ob_bot <= p <= ob_top for p in closes[j + 1:i])
+                    if mitigated or (i - j <= 5):
+                        bear_obs.append({"time": int(times[j]), "top": round(ob_top, 5),
+                            "bottom": round(ob_bot, 5), "type": "bearish",
+                            "high": round(float(highs[j]), 5), "low": round(float(lows[j]), 5),
+                            "atr": round(float(atr.iloc[j]), 5), "signal_idx": i})
                     break
 
-    # Deduplicate by OB candle timestamp
     seen, unique_bull = set(), []
     for ob in bull_obs:
         if ob["time"] not in seen:
-            seen.add(ob["time"])
-            unique_bull.append(ob)
-
+            seen.add(ob["time"]); unique_bull.append(ob)
     seen, unique_bear = set(), []
     for ob in bear_obs:
         if ob["time"] not in seen:
-            seen.add(ob["time"])
-            unique_bear.append(ob)
-
+            seen.add(ob["time"]); unique_bear.append(ob)
     return unique_bull, unique_bear
 
 
 # ══════════════════════════════════════════════════════════════
-# SIGNAL ENGINE  (HTF + BOS + Liquidity + OB + EMA + RSI)
+# CONFIDENCE SCORE
+# ══════════════════════════════════════════════════════════════
+
+def compute_confidence(signal, trend, rsi_val, htf_bias):
+    score = 0
+    if signal["type"] == "buy"  and trend == "bullish" and htf_bias == "bullish": score += 40
+    elif signal["type"] == "sell" and trend == "bearish" and htf_bias == "bearish": score += 40
+    elif (signal["type"] == "buy" and trend == "bullish") or \
+         (signal["type"] == "sell" and trend == "bearish"): score += 20
+    if signal["type"] == "buy"  and 55 < rsi_val <= 70: score += 30
+    elif signal["type"] == "buy"  and 45 <= rsi_val <= 55: score += 15
+    elif signal["type"] == "sell" and 30 <= rsi_val < 45: score += 30
+    elif signal["type"] == "sell" and 45 <= rsi_val <= 55: score += 15
+    if signal.get("rr", 0) >= 2: score += 30
+    return min(score, 100)
+
+
+# ══════════════════════════════════════════════════════════════
+# SIGNAL ENGINE  (score-based + FVG)
 # ══════════════════════════════════════════════════════════════
 
 def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
-    """
-    Full confluence engine:
-      1. HTF 4H bias must align with trade direction
-      2. Price inside order block zone
-      3. Price on correct side of EMA200
-      4. RSI within valid band (45-70 buy / 30-55 sell)
-      5. Break of Structure must have occurred (market shifted)
-      6. Liquidity sweep present (price took out a pool before entry)
-      7. SL = 1.5× ATR below/above OB (prevents immediate stop-out)
-    """
     closes = df["close"]
     ema200 = compute_ema(closes, 200)
     rsi    = compute_rsi(closes, 14)
-
     bull_obs, bear_obs = detect_order_blocks(df)
     all_obs = bull_obs + bear_obs
-
     swing_highs, swing_lows = detect_swings(df)
     structure = detect_structure_breaks(swing_highs, swing_lows)
     liquidity = detect_liquidity(df)
-
-    times    = df["time"].values
-    signals  = []
+    fvgs      = detect_fvg(df)
+    times     = df["time"].values
+    signals   = []
 
     for i in range(200, len(df)):
         price   = float(closes.iloc[i])
@@ -347,453 +297,201 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
         rsi_val = float(rsi.iloc[i])
         atr_val = float(atr_series.iloc[i])
 
-        # HTF bias check
-        candle_date = pd.Timestamp(ts, unit="s").date()
-        htf = htf_bias_map.get(candle_date, "neutral")
+        if not is_trading_session(ts):
+            continue
 
-        # BOS must be recent (within last 50 candles) to be relevant
+        candle_date  = pd.Timestamp(ts, unit="s").date()
+        htf          = htf_bias_map.get(candle_date, "neutral")
         has_bull_bos = any(b["type"] == "bullish_bos" and i - 50 < b["idx"] < i for b in structure)
         has_bear_bos = any(b["type"] == "bearish_bos" and i - 50 < b["idx"] < i for b in structure)
-        # Liquidity sweep must be recent (within last 20 candles)
         has_liq      = any(i - 20 < l["idx"] < i for l in liquidity)
+        has_bull_fvg = any(i - 30 < f["idx"] < i for f in fvgs if f["type"] == "bullish")
+        has_bear_fvg = any(i - 30 < f["idx"] < i for f in fvgs if f["type"] == "bearish")
 
         for ob in all_obs:
             ob_rows = df[df["time"] == ob["time"]]
             if ob_rows.empty or ob_rows.index[0] >= i:
                 continue
-
             in_zone = ob["bottom"] <= price <= ob["top"]
 
-            # ── BUY confluence ─────────────────────────────────
-            if ob["type"] == "bullish" and htf == "bullish":
-                if (in_zone and price > e200
-                        and 45 <= rsi_val <= 70
-                        and has_bull_bos
-                        and has_liq
-                        and is_trading_session(ts)):
+            if ob["type"] == "bullish" and htf == "bullish" and in_zone and price > e200:
+                score = 20
+                if has_bull_bos: score += 25
+                if has_liq:      score += 20
+                if has_bull_fvg: score += 15
+                if 45 <= rsi_val <= 70: score += 15
+                if score >= 50:
                     sl = round(ob["bottom"] - atr_val * 1.5, 5)
                     tp = round(price + (price - sl) * 2.0, 5)
-                    sl_distance = round(price - sl, 5)
-                    buy_sig = {
-                        "time":  ts, "type": "buy",
-                        "price": round(price, 5),
-                        "rsi":   round(rsi_val, 1),
-                        "sl": sl, "tp": tp, "rr": 2.0,
-                        "atr":   round(atr_val, 5),
-                        "htf":   htf,
-                        "lot":   lot_size(sl_distance),
-                    }
-                    buy_sig["confidence"] = compute_confidence(
-                        buy_sig,
-                        "bullish" if price > float(ema200.iloc[i]) else "bearish",
-                        rsi_val, htf
-                    )
-                    if buy_sig["confidence"] >= CONFIDENCE_THRESHOLD:
-                        signals.append(buy_sig)
+                    sig = {"time": ts, "type": "buy", "price": round(price, 5),
+                           "rsi": round(rsi_val, 1), "sl": sl, "tp": tp, "rr": 2.0,
+                           "atr": round(atr_val, 5), "htf": htf,
+                           "lot": lot_size(round(price - sl, 5))}
+                    sig["confidence"] = compute_confidence(sig, "bullish", rsi_val, htf)
+                    if sig["confidence"] >= CONFIDENCE_THRESHOLD:
+                        signals.append(sig)
 
-            # ── SELL confluence ────────────────────────────────
-            elif ob["type"] == "bearish" and htf == "bearish":
-                if (in_zone and price < e200
-                        and 30 <= rsi_val <= 55
-                        and has_bear_bos
-                        and has_liq
-                        and is_trading_session(ts)):
+            elif ob["type"] == "bearish" and htf == "bearish" and in_zone and price < e200:
+                score = 20
+                if has_bear_bos: score += 25
+                if has_liq:      score += 20
+                if has_bear_fvg: score += 15
+                if 30 <= rsi_val <= 55: score += 15
+                if score >= 50:
                     sl = round(ob["top"] + atr_val * 1.5, 5)
                     tp = round(price - (sl - price) * 2.0, 5)
-                    sl_distance = round(sl - price, 5)
-                    sell_sig = {
-                        "time":  ts, "type": "sell",
-                        "price": round(price, 5),
-                        "rsi":   round(rsi_val, 1),
-                        "sl": sl, "tp": tp, "rr": 2.0,
-                        "atr":   round(atr_val, 5),
-                        "htf":   htf,
-                        "lot":   lot_size(sl_distance),
-                    }
-                    sell_sig["confidence"] = compute_confidence(
-                        sell_sig,
-                        "bearish" if price < float(ema200.iloc[i]) else "bullish",
-                        rsi_val, htf
-                    )
-                    if sell_sig["confidence"] >= CONFIDENCE_THRESHOLD:
-                        signals.append(sell_sig)
+                    sig = {"time": ts, "type": "sell", "price": round(price, 5),
+                           "rsi": round(rsi_val, 1), "sl": sl, "tp": tp, "rr": 2.0,
+                           "atr": round(atr_val, 5), "htf": htf,
+                           "lot": lot_size(round(sl - price, 5))}
+                    sig["confidence"] = compute_confidence(sig, "bearish", rsi_val, htf)
+                    if sig["confidence"] >= CONFIDENCE_THRESHOLD:
+                        signals.append(sig)
 
-    # Deduplicate — minimum gap between signals
     deduped, last_ts = [], 0
+    gap = 5 * 3600 if for_display else 3 * 3600
     for s in sorted(signals, key=lambda x: x["time"]):
-        gap = 5 * 3600 if for_display else 3 * 3600
         if s["time"] - last_ts > gap:
-            deduped.append(s)
-            last_ts = s["time"]
-
+            deduped.append(s); last_ts = s["time"]
     return deduped[-10:] if for_display else deduped
 
 
 # ══════════════════════════════════════════════════════════════
-# PLAIN ENGLISH SUMMARY
-# ══════════════════════════════════════════════════════════════
-
-def generate_summary(bias, htf_bias, last_rsi, last_close, ema20, ema50, ema200,
-                     order_blocks, signals, symbol, timeframe):
-    sym_label = {"EURUSD": "EUR/USD", "XAUUSD": "XAU/USD (Gold)",
-                 "USDJPY": "USD/JPY"}.get(symbol, symbol)
-
-    # Trend
-    if last_close > ema200:
-        trend = "Price is above EMA200 — bullish macro structure."
-    else:
-        trend = "Price is below EMA200 — bearish macro structure."
-
-    if last_close > ema50 > ema200:
-        trend += " EMA20/50 stacked bullishly — strong uptrend."
-    elif last_close < ema50 < ema200:
-        trend += " EMA20/50 stacked bearishly — strong downtrend."
-    else:
-        trend += " EMAs mixed — possible consolidation."
-    trend += f" 4H HTF bias: {htf_bias.upper()}."
-
-    # RSI
-    if last_rsi > 70:
-        rsi_desc = f"RSI {last_rsi:.1f} — overbought."
-    elif last_rsi < 30:
-        rsi_desc = f"RSI {last_rsi:.1f} — oversold."
-    elif last_rsi > 55:
-        rsi_desc = f"RSI {last_rsi:.1f} — bullish momentum."
-    elif last_rsi < 45:
-        rsi_desc = f"RSI {last_rsi:.1f} — bearish momentum."
-    else:
-        rsi_desc = f"RSI {last_rsi:.1f} — neutral momentum."
-
-    # Order blocks
-    bull_obs = [o for o in order_blocks if o["type"] == "bullish"]
-    bear_obs = [o for o in order_blocks if o["type"] == "bearish"]
-    ob_desc  = f"{len(bull_obs)} bullish OB(s), {len(bear_obs)} bearish OB(s) detected."
-    if bull_obs:
-        nb = bull_obs[-1]
-        ob_desc += f" Nearest demand: {nb['bottom']} – {nb['top']}."
-    if bear_obs:
-        nb = bear_obs[-1]
-        ob_desc += f" Nearest supply: {nb['bottom']} – {nb['top']}."
-
-    # Signal
-    if signals:
-        last     = signals[-1]
-        sig_type = last["type"].upper()
-        sig_desc = (f"Latest signal: {sig_type} at {last['price']} · "
-                    f"SL {last['sl']} · TP {last['tp']} · "
-                    f"1:{last['rr']} R:R · HTF {last.get('htf','—')} confirmed.")
-    else:
-        sig_desc = ("No HTF-confirmed signals on this timeframe. "
-                    "Waiting for OB + BOS + liquidity + EMA + RSI confluence.")
-
-    # Recommendation
-    if bias == "bullish" and htf_bias == "bullish":
-        rec = "Bias BULLISH — confirmed by 4H HTF. Look for buys from bullish OBs with BOS + liquidity sweep confirmation."
-    elif bias == "bearish" and htf_bias == "bearish":
-        rec = "Bias BEARISH — confirmed by 4H HTF. Look for sells from bearish OBs with BOS + liquidity sweep confirmation."
-    elif htf_bias == "neutral":
-        rec = "4H HTF is NEUTRAL. No trades until higher timeframe gives a clear direction."
-    else:
-        rec = (f"LTF bias ({bias}) conflicts with 4H HTF ({htf_bias}). "
-               "Wait for alignment before entering.")
-
-    return {
-        "symbol": sym_label, "timeframe": timeframe,
-        "trend": trend, "rsi_desc": rsi_desc,
-        "ob_desc": ob_desc, "sig_desc": sig_desc,
-        "rec": rec, "bias": bias, "htf_bias": htf_bias,
-    }
-
-
-
-# ══════════════════════════════════════════════════════════════
-# AI ANALYSIS NARRATIVE  (your addition)
-# ══════════════════════════════════════════════════════════════
-
-def generate_ai_analysis(df, signals):
-    """
-    Generates a plain-English market narrative combining trend,
-    momentum, volatility and recent signal bias.
-    """
-    if len(df) < 50:
-        return "Not enough data for analysis."
-
-    close      = df["close"]
-    ema50      = compute_ema(close, 50)
-    ema200     = compute_ema(close, 200)
-    last_price = float(close.iloc[-1])
-
-    # Trend
-    if ema50.iloc[-1] > ema200.iloc[-1]:
-        trend = "bullish"
-    elif ema50.iloc[-1] < ema200.iloc[-1]:
-        trend = "bearish"
-    else:
-        trend = "sideways"
-
-    # Momentum
-    rsi     = compute_rsi(close)
-    rsi_val = float(rsi.iloc[-1])
-    if rsi_val > 60:
-        momentum = "strong bullish momentum"
-    elif rsi_val < 40:
-        momentum = "strong bearish momentum"
-    else:
-        momentum = "weak / ranging momentum"
-
-    # Volatility
-    atr = compute_atr(df)
-    vol = float(atr.iloc[-1])
-
-    # Signal bias
-    last_signal = signals[-1]["type"] if signals else "none"
-
-    analysis = (
-        f"Market Analysis:\n"
-        f"- Current price: {round(last_price, 5)}\n"
-        f"- Trend: {trend}\n"
-        f"- Momentum: {momentum} (RSI: {round(rsi_val, 1)})\n"
-        f"- Volatility (ATR): {round(vol, 5)}\n"
-        f"Structure suggests a {trend} environment with {momentum}. "
-        f"Recent signals indicate: {last_signal} bias.\n"
-        f"Strategy: Look for confirmations in line with the dominant trend "
-        f"and avoid counter-trend trades unless strong reversals occur."
-    )
-    return analysis.strip()
-
-
-
-
-# ══════════════════════════════════════════════════════════════
-# CONFIDENCE SCORE  (added by user)
-# ══════════════════════════════════════════════════════════════
-
-def compute_confidence(signal, trend, rsi_val, htf_bias):
-    """
-    Score a signal 0-100 based on confluence factors.
-      40pts — signal direction matches both LTF trend and HTF bias
-      30pts — RSI confirms momentum (>60 for buys, <40 for sells)
-      30pts — R:R is 2:1 or better
-    """
-    score = 0
-
-    # Trend + HTF alignment (strongest factor)
-    if signal["type"] == "buy"  and trend == "bullish" and htf_bias == "bullish":
-        score += 40
-    elif signal["type"] == "sell" and trend == "bearish" and htf_bias == "bearish":
-        score += 40
-    elif (signal["type"] == "buy"  and trend == "bullish") or          (signal["type"] == "sell" and trend == "bearish"):
-        score += 20   # partial credit — LTF only
-
-    # RSI momentum confirmation
-    if signal["type"] == "buy"  and rsi_val > 60:
-        score += 30
-    elif signal["type"] == "sell" and rsi_val < 40:
-        score += 30
-    elif 45 <= rsi_val <= 70 and signal["type"] == "buy":
-        score += 15
-    elif 30 <= rsi_val <= 55 and signal["type"] == "sell":
-        score += 15
-
-    # Risk/reward quality
-    if signal.get("rr", 0) >= 2:
-        score += 30
-
-    return min(score, 100)
-
-
-# ══════════════════════════════════════════════════════════════
-# AUTO TRADE EXECUTOR  (added by user — simulated)
+# TRADE EXECUTOR
 # ══════════════════════════════════════════════════════════════
 
 def execute_trade(signal, symbol="XAUUSD", lot=0.01, use_mt5=False):
-    """
-    Trade executor — two modes:
-      use_mt5=False (default): simulation only, prints to console
-      use_mt5=True           : sends real order to MetaTrader 5 (Windows only)
-    CAUTION: Always test on a demo account before going live.
-    """
-    confidence = signal.get("confidence", 0)
     print(f"[TradeView] {signal['type'].upper()} @ {signal['price']} | "
-          f"SL: {signal['sl']} | TP: {signal['tp']} | Confidence: {confidence}%")
-
+          f"SL: {signal['sl']} | TP: {signal['tp']} | "
+          f"Lot: {lot} | Confidence: {signal.get('confidence','—')}%")
     if use_mt5:
         return execute_trade_mt5(signal, symbol=symbol, lot=lot)
-    else:
-        print("[TradeView] Simulation mode — set use_mt5=True to send real orders")
-        return None
+    print("[TradeView] Simulation mode — set use_mt5=True for live orders")
+    return None
 
 
 # ══════════════════════════════════════════════════════════════
-# METATRADER 5 INTEGRATION  (Windows only — local execution)
+# MT5 INTEGRATION  (Windows only)
 # ══════════════════════════════════════════════════════════════
 
 def fetch_live_data_mt5(symbol="XAUUSD", timeframe=None, n=300):
-    """
-    Fetch live OHLCV data directly from MetaTrader 5.
-    Falls back to Twelve Data API if MT5 is unavailable.
-    Requires: pip install MetaTrader5
-    Only works on Windows with MT5 installed and logged in.
-    """
     try:
         import MetaTrader5 as mt5
-
-        # Use M5 as default if no timeframe passed
         tf = timeframe if timeframe is not None else mt5.TIMEFRAME_M5
-
         if not mt5.initialize():
-            print("[MT5] Initialization failed — falling back to API")
             return []
-
         rates = mt5.copy_rates_from_pos(symbol, tf, 0, n)
         mt5.shutdown()
-
         if rates is None or len(rates) == 0:
-            print("[MT5] No data received")
             return []
-
-        candles = []
-        for r in rates:
-            candles.append({
-                "time":  int(r["time"]),
-                "open":  float(r["open"]),
-                "high":  float(r["high"]),
-                "low":   float(r["low"]),
-                "close": float(r["close"]),
-                "volume": float(r.get("tick_volume", 0)),
-            })
-        return candles
-
+        return [{"time": int(r["time"]), "open": float(r["open"]), "high": float(r["high"]),
+                 "low": float(r["low"]), "close": float(r["close"]),
+                 "volume": float(r.get("tick_volume", 0))} for r in rates]
     except ImportError:
-        print("[MT5] MetaTrader5 package not installed. Run: pip install MetaTrader5")
+        print("[MT5] Run: pip install MetaTrader5")
         return []
     except Exception as e:
-        print(f"[MT5] Error fetching data: {e}")
+        print(f"[MT5] Error: {e}")
         return []
 
 
 def execute_trade_mt5(signal, symbol="XAUUSD", lot=0.01):
-    """
-    Send a live trade to MetaTrader 5.
-    CAUTION: This places REAL trades with REAL money.
-    Test on a demo account first.
-    Requires: pip install MetaTrader5
-    Only works on Windows with MT5 installed and logged in.
-    """
     try:
         import MetaTrader5 as mt5
-
         if not mt5.initialize():
-            print("[MT5] Initialization failed — trade not sent")
             return None
-
         tick = mt5.symbol_info_tick(symbol)
         if tick is None:
-            print(f"[MT5] Could not get tick for {symbol}")
-            mt5.shutdown()
-            return None
-
-        if signal["type"] == "buy":
-            price      = tick.ask
-            order_type = mt5.ORDER_TYPE_BUY
-        else:
-            price      = tick.bid
-            order_type = mt5.ORDER_TYPE_SELL
-
-        request = {
-            "action":      mt5.TRADE_ACTION_DEAL,
-            "symbol":      symbol,
-            "volume":      lot,
-            "type":        order_type,
-            "price":       price,
-            "sl":          signal["sl"],
-            "tp":          signal["tp"],
-            "deviation":   10,
-            "magic":       123456,
-            "comment":     f"TradeView AI | Confidence: {signal.get('confidence', '—')}%",
-            "type_time":   mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
-        }
-
+            mt5.shutdown(); return None
+        price      = tick.ask if signal["type"] == "buy" else tick.bid
+        order_type = mt5.ORDER_TYPE_BUY if signal["type"] == "buy" else mt5.ORDER_TYPE_SELL
+        request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": lot,
+                   "type": order_type, "price": price, "sl": signal["sl"], "tp": signal["tp"],
+                   "deviation": 10, "magic": 123456,
+                   "comment": f"TradeView | {signal.get('confidence','—')}%",
+                   "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_IOC}
         result = mt5.order_send(request)
         mt5.shutdown()
-
         if result.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"[MT5] ✓ Trade executed: {signal['type'].upper()} {symbol} @ {price}")
-            print(f"      SL: {signal['sl']} | TP: {signal['tp']} | Lot: {lot}")
+            print(f"[MT5] ✓ {signal['type'].upper()} {symbol} @ {price}")
         else:
-            print(f"[MT5] ✗ Trade failed. Retcode: {result.retcode} — {result.comment}")
-
+            print(f"[MT5] ✗ Code: {result.retcode} — {result.comment}")
         return result
-
     except ImportError:
-        print("[MT5] MetaTrader5 package not installed. Run: pip install MetaTrader5")
-        return None
+        print("[MT5] Run: pip install MetaTrader5"); return None
     except Exception as e:
-        print(f"[MT5] Error executing trade: {e}")
-        return None
+        print(f"[MT5] Error: {e}"); return None
+
 
 # ══════════════════════════════════════════════════════════════
-# AI NARRATIVE ANALYSIS  (added by user)
+# AI NARRATIVE & SUMMARY
 # ══════════════════════════════════════════════════════════════
 
 def generate_ai_analysis(df, signals):
-    """
-    Generate a plain-English market narrative covering trend,
-    momentum, volatility and signal bias.
-    """
     if len(df) < 50:
         return "Not enough data for analysis."
-
-    close  = df["close"]
-    ema50  = compute_ema(close, 50)
-    ema200 = compute_ema(close, 200)
+    close      = df["close"]
+    ema50      = compute_ema(close, 50)
+    ema200     = compute_ema(close, 200)
     last_price = float(close.iloc[-1])
+    trend      = "bullish" if ema50.iloc[-1] > ema200.iloc[-1] else \
+                 "bearish" if ema50.iloc[-1] < ema200.iloc[-1] else "sideways"
+    rsi_val    = float(compute_rsi(close).iloc[-1])
+    momentum   = "strong bullish" if rsi_val > 60 else "strong bearish" if rsi_val < 40 else "weak / ranging"
+    atr_val    = float(compute_atr(df).iloc[-1])
+    last_sig   = signals[-1]["type"] if signals else "none"
+    return (f"Market Analysis:\n- Price: {round(last_price, 5)}\n- Trend: {trend}\n"
+            f"- Momentum: {momentum} (RSI {round(rsi_val,1)})\n"
+            f"- Volatility (ATR): {round(atr_val, 5)}\n"
+            f"Structure: {trend} with {momentum} momentum. Last signal: {last_sig}.\n"
+            f"Strategy: Trade with the dominant trend. Avoid counter-trend entries "
+            f"unless strong reversal confluence appears.")
 
-    # Trend
-    if ema50.iloc[-1] > ema200.iloc[-1]:
-        trend = "bullish"
-    elif ema50.iloc[-1] < ema200.iloc[-1]:
-        trend = "bearish"
+
+def generate_summary(bias, htf_bias, last_rsi, last_close, ema20, ema50, ema200,
+                     order_blocks, signals, symbol, timeframe):
+    sym_label = {"EURUSD": "EUR/USD", "XAUUSD": "XAU/USD (Gold)", "USDJPY": "USD/JPY"}.get(symbol, symbol)
+    trend = "Above EMA200 — bullish macro." if last_close > ema200 else "Below EMA200 — bearish macro."
+    if last_close > ema50 > ema200:   trend += " EMAs stacked bullishly."
+    elif last_close < ema50 < ema200: trend += " EMAs stacked bearishly."
+    else:                              trend += " EMAs mixed."
+    trend += f" 4H HTF: {htf_bias.upper()}."
+    if last_rsi > 70:   rsi_desc = f"RSI {last_rsi:.1f} — overbought."
+    elif last_rsi < 30: rsi_desc = f"RSI {last_rsi:.1f} — oversold."
+    elif last_rsi > 55: rsi_desc = f"RSI {last_rsi:.1f} — bullish momentum."
+    elif last_rsi < 45: rsi_desc = f"RSI {last_rsi:.1f} — bearish momentum."
+    else:               rsi_desc = f"RSI {last_rsi:.1f} — neutral."
+    bull_obs = [o for o in order_blocks if o["type"] == "bullish"]
+    bear_obs = [o for o in order_blocks if o["type"] == "bearish"]
+    ob_desc  = f"{len(bull_obs)} bullish OB(s), {len(bear_obs)} bearish OB(s)."
+    if bull_obs: ob_desc += f" Demand: {bull_obs[-1]['bottom']}–{bull_obs[-1]['top']}."
+    if bear_obs: ob_desc += f" Supply: {bear_obs[-1]['bottom']}–{bear_obs[-1]['top']}."
+    if signals:
+        s = signals[-1]
+        sig_desc = (f"Latest: {s['type'].upper()} @ {s['price']} · SL {s['sl']} · "
+                    f"TP {s['tp']} · 1:{s['rr']} R:R · {s.get('confidence','—')}% conf.")
     else:
-        trend = "sideways"
-
-    # Momentum
-    rsi     = compute_rsi(close)
-    rsi_val = float(rsi.iloc[-1])
-    if rsi_val > 60:
-        momentum = "strong bullish momentum"
-    elif rsi_val < 40:
-        momentum = "strong bearish momentum"
+        sig_desc = "No confirmed signals. Waiting for full confluence."
+    if bias == "bullish" and htf_bias == "bullish":
+        rec = "BULLISH — HTF confirmed. Buy from bullish OBs with BOS + FVG + liquidity."
+    elif bias == "bearish" and htf_bias == "bearish":
+        rec = "BEARISH — HTF confirmed. Sell from bearish OBs with BOS + FVG + liquidity."
+    elif htf_bias == "neutral":
+        rec = "HTF NEUTRAL — wait for direction before entering."
     else:
-        momentum = "weak / ranging momentum"
+        rec = f"LTF ({bias}) conflicts with HTF ({htf_bias}). Wait for alignment."
+    return {"symbol": sym_label, "timeframe": timeframe, "trend": trend,
+            "rsi_desc": rsi_desc, "ob_desc": ob_desc, "sig_desc": sig_desc,
+            "rec": rec, "bias": bias, "htf_bias": htf_bias}
 
-    # Volatility
-    atr = compute_atr(df)
-    vol = float(atr.iloc[-1])
-
-    # Signal bias
-    last_signal = signals[-1]["type"] if signals else "none"
-
-    # Narrative
-    analysis = (
-        f"Market Analysis:\n"
-        f"- Current price: {round(last_price, 5)}\n"
-        f"- Trend: {trend}\n"
-        f"- Momentum: {momentum} (RSI: {round(rsi_val, 1)})\n"
-        f"- Volatility (ATR): {round(vol, 5)}\n"
-        f"Structure suggests a {trend} environment with {momentum}. "
-        f"Recent signals indicate: {last_signal} bias.\n"
-        f"Strategy: Look for confirmations in line with the dominant trend "
-        f"and avoid counter-trend trades unless strong reversals occur."
-    )
-    return analysis.strip()
 
 # ══════════════════════════════════════════════════════════════
-# MAIN RUNNER  (called by app.py and scanner.py)
+# MAIN RUNNER
 # ══════════════════════════════════════════════════════════════
 
 def run_analysis(candles, symbol="EURUSD", timeframe="1h"):
+    global CONFIDENCE_THRESHOLD
+
     df = pd.DataFrame(candles)
     for col in ["open", "high", "low", "close"]:
         df[col] = df[col].astype(float)
@@ -803,6 +501,11 @@ def run_analysis(candles, symbol="EURUSD", timeframe="1h"):
     closes = df["close"]
     times  = df["time"].values
     atr    = compute_atr(df)
+
+    # Dynamic confidence threshold
+    base_threshold   = 65 if symbol == "XAUUSD" else 70
+    vol_factor       = 5 if atr.iloc[-1] > atr.mean() * 1.3 else -5
+    CONFIDENCE_THRESHOLD = max(60, min(90, base_threshold + vol_factor))
 
     ema20  = compute_ema(closes, 20)
     ema50  = compute_ema(closes, 50)
@@ -816,35 +519,27 @@ def run_analysis(candles, symbol="EURUSD", timeframe="1h"):
     }
     rsi_line = [{"time": int(times[i]), "value": round(float(rsi.iloc[i]), 2)} for i in range(len(df))]
 
-    htf_bias_map         = get_htf_bias(df)
-    bull_obs, bear_obs   = detect_order_blocks(df)
-    display_obs          = bull_obs[-8:] + bear_obs[-8:]
-    signals              = detect_entry_signals(df, atr, htf_bias_map, for_display=True)
+    htf_bias_map       = get_htf_bias(df)
+    bull_obs, bear_obs = detect_order_blocks(df)
+    display_obs        = bull_obs[-8:] + bear_obs[-8:]
+    signals            = detect_entry_signals(df, atr, htf_bias_map, for_display=True)
 
     last_close = float(closes.iloc[-1])
     last_e200  = float(ema200.iloc[-1])
     last_e50   = float(ema50.iloc[-1])
     last_rsi   = float(rsi.iloc[-1])
 
-    if last_close > last_e200 and last_close > last_e50:
-        bias = "bullish"
-    elif last_close < last_e200 and last_close < last_e50:
-        bias = "bearish"
-    else:
-        bias = "neutral"
+    bias = "bullish" if last_close > last_e200 and last_close > last_e50 else \
+           "bearish" if last_close < last_e200 and last_close < last_e50 else "neutral"
 
     last_date = pd.Timestamp(int(times[-1]), unit="s").date()
     htf_bias  = htf_bias_map.get(last_date, "neutral")
 
-    summary = generate_summary(
-        bias, htf_bias, last_rsi, last_close,
-        float(ema20.iloc[-1]), float(ema50.iloc[-1]), last_e200,
-        display_obs, signals, symbol, timeframe
-    )
-
+    summary     = generate_summary(bias, htf_bias, last_rsi, last_close,
+                                   float(ema20.iloc[-1]), float(ema50.iloc[-1]), last_e200,
+                                   display_obs, signals, symbol, timeframe)
     ai_analysis = generate_ai_analysis(df, signals)
 
-    # Auto-execute best signal if it meets adaptive confidence threshold
     if signals:
         best = max(signals, key=lambda x: x.get("confidence", 0))
         if best.get("confidence", 0) >= CONFIDENCE_THRESHOLD:
