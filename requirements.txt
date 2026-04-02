@@ -5,3 +5,4 @@ requests
 gunicorn
 numpy
 scipy
+optuna

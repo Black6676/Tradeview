@@ -40,6 +40,10 @@ def backtest_page():
 def alerts_page():
     return render_template("alerts.html")
 
+@app.route("/walkforward")
+def walkforward_page():
+    return render_template("walkforward.html")
+
 
 # ── API: Live chart data ───────────────────────────────────────
 
@@ -159,6 +163,89 @@ def trigger_scan():
     from scanner import run_scan
     threading.Thread(target=run_scan, daemon=True).start()
     return jsonify({"ok": True, "message": "Scan started"})
+
+
+# ── API: Walk-Forward Backtest ────────────────────────────────
+
+@app.route("/api/walkforward")
+def get_walkforward():
+    symbol    = request.args.get("symbol", "EURUSD")
+    timeframe = request.args.get("timeframe", "1h")
+    if symbol not in INSTRUMENTS:
+        return jsonify({"error": "Unknown symbol"}), 400
+    instrument = INSTRUMENTS[symbol]
+    tf_map = {"1h": {"interval": "1h", "outputsize": 500},
+              "4h": {"interval": "4h", "outputsize": 300}}
+    tf = tf_map.get(timeframe, tf_map["1h"])
+    try:
+        params = {"symbol": instrument["symbol"], "interval": tf["interval"],
+                  "outputsize": tf["outputsize"], "apikey": API_KEY, "format": "JSON"}
+        resp = requests.get(f"{BASE_URL}/time_series", params=params, timeout=15)
+        data = resp.json()
+        if "code" in data or "values" not in data:
+            return jsonify({"error": data.get("message", "No data")}), 502
+        candles = []
+        for bar in data["values"]:
+            candles.append({"time": int(pd.Timestamp(bar["datetime"]).timestamp()),
+                "open": round(float(bar["open"]), 5), "high": round(float(bar["high"]), 5),
+                "low": round(float(bar["low"]), 5), "close": round(float(bar["close"]), 5),
+                "volume": round(float(bar.get("volume", 0)), 2)})
+        candles.sort(key=lambda x: x["time"])
+        from walkforward import run_walkforward
+        result = run_walkforward(candles, symbol=symbol, timeframe=timeframe)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── API: Optimization ────────────────────────────────────────
+
+@app.route("/api/optimize")
+def get_optimize():
+    symbol    = request.args.get("symbol", "XAUUSD")
+    timeframe = request.args.get("timeframe", "1h")
+    n_trials  = int(request.args.get("trials", 50))
+    if symbol not in INSTRUMENTS:
+        return jsonify({"error": "Unknown symbol"}), 400
+    try:
+        from optimize import run_optimization
+        result = run_optimization(symbol=symbol, timeframe=timeframe, n_trials=n_trials)
+        if result is None:
+            return jsonify({"error": "Optuna not installed on server"}), 500
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── API: MT5 Trade Execution ──────────────────────────────────
+
+@app.route("/api/trade", methods=["POST"])
+def execute_mt5_trade():
+    """
+    Trigger a real MT5 trade from the web UI.
+    Only works when running locally on Windows with MT5 open.
+    Body: { symbol, type, price, sl, tp, rr, confidence, lot }
+    """
+    try:
+        data   = request.get_json()
+        signal = {
+            "type":       data.get("type"),
+            "price":      data.get("price"),
+            "sl":         data.get("sl"),
+            "tp":         data.get("tp"),
+            "rr":         data.get("rr", 2.0),
+            "confidence": data.get("confidence", 0),
+        }
+        symbol   = data.get("symbol", "XAUUSD")
+        lot      = float(data.get("lot", 0.01))
+        use_mt5  = data.get("use_mt5", False)
+
+        from algorithm import execute_trade
+        execute_trade(signal, symbol=symbol, lot=lot, use_mt5=use_mt5)
+
+        return jsonify({"ok": True, "message": f"Trade submitted: {signal['type'].upper()} {symbol}"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Run ────────────────────────────────────────────────────────

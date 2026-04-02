@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TradeView — Walk-Forward</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+  <link rel="stylesheet" href="/static/css/backtest.css"/>
+  <style>
+    .wf-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:20px; }
+    .sharpe-good { color: var(--green); }
+    .sharpe-bad  { color: var(--red); }
+    .equity-wrap { height:280px; background:var(--bg2); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+    .equity-wrap canvas { width:100%!important; height:100%!important; }
+    .wf-note { font-size:11px; color:var(--text3); margin-top:8px; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo"><span class="logo-mark">T</span><span class="logo-text">TRADEVIEW</span></div>
+    <nav class="nav-tabs">
+      <a href="/" class="nav-tab">Live Chart</a>
+      <a href="/backtest" class="nav-tab">Backtest</a>
+      <a href="/walkforward" class="nav-tab active">Walk-Forward</a>
+      <a href="/alerts" class="nav-tab">Alerts</a>
+    </nav>
+  </header>
+
+  <div class="bt-controls">
+    <div class="bt-control-group">
+      <label class="bt-label">Instrument</label>
+      <div class="instrument-tabs" id="wfInstrumentTabs">
+        <button class="inst-btn active" data-symbol="EURUSD">EUR/USD</button>
+        <button class="inst-btn" data-symbol="XAUUSD">XAU/USD</button>
+        <button class="inst-btn" data-symbol="USDJPY">USD/JPY</button>
+      </div>
+    </div>
+    <div class="bt-control-group">
+      <label class="bt-label">Timeframe</label>
+      <div class="tf-tabs" id="wfTfTabs">
+        <button class="tf-btn active" data-tf="1h">1H</button>
+        <button class="tf-btn" data-tf="4h">4H</button>
+      </div>
+    </div>
+    <button class="run-btn" id="wfRunBtn">Run Walk-Forward</button>
+  </div>
+
+  <div class="bt-body" id="wfBody">
+    <div class="bt-empty" id="wfEmpty">
+      <div class="empty-icon">▶</div>
+      <div class="empty-text">Walk-forward tests the algorithm on rolling windows of real data</div>
+      <div class="empty-sub">More realistic than static backtesting — each window uses unseen data</div>
+    </div>
+
+    <div class="bt-results hidden" id="wfResults">
+      <div class="wf-stats" id="wfStatsRow"></div>
+
+      <div class="chart-section">
+        <div class="section-title">Equity Curve (USD)</div>
+        <div class="equity-wrap"><canvas id="wfEquityCanvas"></canvas></div>
+      </div>
+
+      <div class="chart-section" style="margin-top:16px">
+        <div class="section-title">Trade Log</div>
+        <div class="trade-table-wrap">
+          <table class="trade-table">
+            <thead><tr>
+              <th>#</th><th>Window</th><th>Type</th><th>Entry</th>
+              <th>SL</th><th>TP</th><th>Lot</th><th>Conf%</th>
+              <th>Result</th><th>P&L (R)</th><th>P&L ($)</th>
+            </tr></thead>
+            <tbody id="wfTradeBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="wf-note">
+        Walk-forward uses 500-candle windows stepping 100 candles at a time.
+        Outcomes determined by actual forward candles hitting SL or TP — no random simulation.
+      </div>
+    </div>
+
+    <div class="bt-loading hidden" id="wfLoading">
+      <div class="spinner"></div>
+      <span class="loading-text">Running walk-forward analysis… this may take 20–30 seconds</span>
+    </div>
+    <div class="bt-error hidden" id="wfError">
+      <span class="error-icon">⚠</span>
+      <span id="wfErrorMsg">Something went wrong.</span>
+      <button onclick="runWalkForward()">Retry</button>
+    </div>
+  </div>
+
+  <footer class="statusbar">
+    <span id="wfStatus">Ready</span>
+    <span class="status-right">Walk-Forward · Real Forward Simulation · Phase 4B+</span>
+  </footer>
+
+  <script>
+    let wfSymbol = 'EURUSD', wfTf = '1h', wfChart = null;
+
+    document.getElementById('wfInstrumentTabs').addEventListener('click', e => {
+      const b = e.target.closest('.inst-btn'); if(!b) return;
+      document.querySelectorAll('#wfInstrumentTabs .inst-btn').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active'); wfSymbol = b.dataset.symbol;
+    });
+    document.getElementById('wfTfTabs').addEventListener('click', e => {
+      const b = e.target.closest('.tf-btn'); if(!b) return;
+      document.querySelectorAll('#wfTfTabs .tf-btn').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active'); wfTf = b.dataset.tf;
+    });
+    document.getElementById('wfRunBtn').addEventListener('click', runWalkForward);
+
+    async function runWalkForward() {
+      const btn = document.getElementById('wfRunBtn');
+      btn.disabled = true; btn.textContent = 'Running…';
+      show('wfLoading'); hide('wfEmpty'); hide('wfResults'); hide('wfError');
+      document.getElementById('wfStatus').textContent = 'Running walk-forward…';
+      try {
+        const res  = await fetch(`/api/walkforward?symbol=${wfSymbol}&timeframe=${wfTf}`);
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || 'Server error');
+        renderStats(data.stats);
+        renderEquity(data.equity_curve);
+        renderTrades(data.trades);
+        show('wfResults'); hide('wfLoading');
+        document.getElementById('wfStatus').textContent =
+          `${data.stats.total_trades} trades · Win rate ${data.stats.win_rate}% · Sharpe ${data.stats.sharpe} · Net P&L $${data.stats.net_pnl}`;
+      } catch(e) {
+        document.getElementById('wfErrorMsg').textContent = e.message;
+        show('wfError'); hide('wfLoading');
+      } finally {
+        btn.disabled = false; btn.textContent = 'Run Walk-Forward';
+      }
+    }
+
+    function renderStats(s) {
+      const cards = [
+        {label:'Total Trades', value: s.total_trades, cls:''},
+        {label:'Win Rate',     value: s.win_rate+'%', cls: s.win_rate >= 50 ? 'green' : 'red'},
+        {label:'Sharpe Ratio', value: s.sharpe,       cls: s.sharpe >= 1 ? 'sharpe-good' : 'sharpe-bad'},
+        {label:'Profit Factor',value: s.profit_factor,cls: s.profit_factor >= 1.5 ? 'green' : s.profit_factor >= 1 ? '' : 'red'},
+        {label:'Max Drawdown', value: '$'+s.max_drawdown, cls:'red'},
+        {label:'Net P&L',      value: '$'+s.net_pnl, cls: s.net_pnl >= 0 ? 'green' : 'red'},
+        {label:'Wins / Losses',value: s.wins+' / '+s.losses, cls:''},
+        {label:'Windows Tested',value: s.windows_tested, cls:''},
+      ];
+      document.getElementById('wfStatsRow').style.gridTemplateColumns = 'repeat(4,1fr)';
+      document.getElementById('wfStatsRow').innerHTML = cards.map(c =>
+        `<div class="stat-card"><div class="stat-label">${c.label}</div>
+         <div class="stat-value ${c.cls}">${c.value}</div></div>`
+      ).join('');
+    }
+
+    function renderEquity(curve) {
+      if (wfChart) { wfChart.destroy(); wfChart = null; }
+      const ctx = document.getElementById('wfEquityCanvas').getContext('2d');
+      const data = curve.map(e => ({ x: e.window, y: e.equity }));
+      const last = data[data.length-1]?.y || 1000;
+      wfChart = new Chart(ctx, {
+        type: 'line',
+        data: { datasets: [{ label:'Equity', data,
+          borderColor: last >= 1000 ? '#26a69a' : '#ef5350',
+          backgroundColor: last >= 1000 ? 'rgba(38,166,154,0.1)' : 'rgba(239,83,80,0.1)',
+          borderWidth: 2, pointRadius: 2, fill: true, tension: 0.3 }] },
+        options: { responsive:true, maintainAspectRatio:false, animation:false,
+          plugins:{ legend:{display:false},
+            tooltip:{ backgroundColor:'#111318', borderColor:'#1f2535', borderWidth:1,
+              titleColor:'#e2e6f0', bodyColor:'#8892a8',
+              callbacks:{ label: c => 'Equity: $'+c.parsed.y.toFixed(2) }}},
+          scales:{
+            x:{ title:{display:true,text:'Window',color:'#4a5470'}, ticks:{color:'#8892a8'}, grid:{color:'#1a1f2e'}},
+            y:{ position:'right', ticks:{color:'#8892a8',callback:v=>'$'+v.toFixed(0)}, grid:{color:'#1a1f2e'}}
+          }}
+      });
+    }
+
+    function renderTrades(trades) {
+      const tbody = document.getElementById('wfTradeBody');
+      tbody.innerHTML = trades.map((t,i) => {
+        const pnlCls = t.result==='win'?'pnl-win':t.result==='loss'?'pnl-loss':'pnl-open';
+        const pnlR   = t.result==='win'?'+2R':t.result==='loss'?'-1R':'Open';
+        return `<tr class="${t.result}">
+          <td>${i+1}</td><td>${t.window||'—'}</td>
+          <td class="${t.type==='buy'?'badge-buy':'badge-sell'}">${t.type.toUpperCase()}</td>
+          <td>${t.price}</td><td>${t.sl}</td><td>${t.tp}</td>
+          <td>${t.lot||0.01}</td><td>${t.confidence||'—'}</td>
+          <td>${(t.result||'open').toUpperCase()}</td>
+          <td class="${pnlCls}">${pnlR}</td>
+          <td class="${pnlCls}">${t.pnl_dollars!=null?'$'+t.pnl_dollars:'—'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    function show(id){document.getElementById(id).classList.remove('hidden');}
+    function hide(id){document.getElementById(id).classList.add('hidden');}
+  </script>
+</body>
+</html>
