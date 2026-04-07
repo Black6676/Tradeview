@@ -49,10 +49,14 @@ _trade_history = []
 
 
 def is_trading_session(ts):
-    """London/NY overlap only — 12:00–20:00 UTC."""
+    """
+    Active market hours: 07:00–20:00 UTC.
+    Covers London open through NY close.
+    Excludes Asian session low-liquidity dead zone (20:00–07:00).
+    """
     from datetime import datetime, timezone
     hour = datetime.fromtimestamp(ts, tz=timezone.utc).hour
-    return 12 <= hour <= 20
+    return 7 <= hour <= 20
 
 
 def lot_size(sl_distance, account_balance=None, risk_pct=None):
@@ -320,7 +324,7 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                 if has_liq:      score += 20
                 if has_bull_fvg: score += 15
                 if 45 <= rsi_val <= 70: score += 15
-                if score >= 50:
+                if score >= 35:
                     sl = round(ob["bottom"] - atr_val * 1.5, 5)
                     tp = round(price + (price - sl) * 2.0, 5)
                     sig = {"time": ts, "type": "buy", "price": round(price, 5),
@@ -337,7 +341,7 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                 if has_liq:      score += 20
                 if has_bear_fvg: score += 15
                 if 30 <= rsi_val <= 55: score += 15
-                if score >= 50:
+                if score >= 35:
                     sl = round(ob["top"] + atr_val * 1.5, 5)
                     tp = round(price - (sl - price) * 2.0, 5)
                     sig = {"time": ts, "type": "sell", "price": round(price, 5),
@@ -386,7 +390,7 @@ def fetch_live_data_mt5(symbol="XAUUSD", timeframe=None, n=300):
             return []
         return [{"time": int(r["time"]), "open": float(r["open"]), "high": float(r["high"]),
                  "low": float(r["low"]), "close": float(r["close"]),
-                 "volume": float(r.get("tick_volume", 0))} for r in rates]
+                 "volume": float(r["tick_volume"]) if "tick_volume" in r.dtype.names else 0.0} for r in rates]
     except ImportError:
         print("[MT5] Run: pip install MetaTrader5")
         return []
@@ -396,31 +400,21 @@ def fetch_live_data_mt5(symbol="XAUUSD", timeframe=None, n=300):
 
 
 def execute_trade_mt5(signal, symbol="XAUUSD", lot=0.01):
+    """Routes to mt5_connection.py for clean separation of concerns."""
     try:
-        import MetaTrader5 as mt5
-        if not mt5.initialize():
+        from mt5_connection import connect, place_order, disconnect
+        if not connect():
+            print("[MT5] Could not connect — trade not sent")
             return None
-        tick = mt5.symbol_info_tick(symbol)
-        if tick is None:
-            mt5.shutdown(); return None
-        price      = tick.ask if signal["type"] == "buy" else tick.bid
-        order_type = mt5.ORDER_TYPE_BUY if signal["type"] == "buy" else mt5.ORDER_TYPE_SELL
-        request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": lot,
-                   "type": order_type, "price": price, "sl": signal["sl"], "tp": signal["tp"],
-                   "deviation": 10, "magic": 123456,
-                   "comment": f"TradeView | {signal.get('confidence','—')}%",
-                   "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_IOC}
-        result = mt5.order_send(request)
-        mt5.shutdown()
-        if result.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"[MT5] ✓ {signal['type'].upper()} {symbol} @ {price}")
-        else:
-            print(f"[MT5] ✗ Code: {result.retcode} — {result.comment}")
+        result = place_order(signal, symbol=symbol, lot=lot)
+        disconnect()
         return result
     except ImportError:
-        print("[MT5] Run: pip install MetaTrader5"); return None
+        print("[MT5] mt5_connection.py not found or MetaTrader5 not installed")
+        return None
     except Exception as e:
-        print(f"[MT5] Error: {e}"); return None
+        print(f"[MT5] Error: {e}")
+        return None
 
 
 # ══════════════════════════════════════════════════════════════
@@ -503,9 +497,9 @@ def run_analysis(candles, symbol="EURUSD", timeframe="1h"):
     atr    = compute_atr(df)
 
     # Dynamic confidence threshold
-    base_threshold   = 65 if symbol == "XAUUSD" else 70
-    vol_factor       = 5 if atr.iloc[-1] > atr.mean() * 1.3 else -5
-    CONFIDENCE_THRESHOLD = max(60, min(90, base_threshold + vol_factor))
+    base_threshold   = 60 if symbol == "XAUUSD" else 65
+    vol_factor       = 5 if atr.iloc[-1] > atr.mean() * 1.3 else 0
+    CONFIDENCE_THRESHOLD = max(55, min(80, base_threshold + vol_factor))
 
     ema20  = compute_ema(closes, 20)
     ema50  = compute_ema(closes, 50)
