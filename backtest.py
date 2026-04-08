@@ -80,11 +80,12 @@ def run_backtest(candles, symbol="EURUSD"):
 
             in_zone = ob["bottom"] <= price <= ob["top"]
 
-            if ob["type"] == "bullish" and htf == "bullish":
-                if (in_zone and price > e200
-                        and 45 <= rsi_val <= 70
-                        and has_bull_bos and has_liq
-                        and is_trading_session(ts)):
+            if ob["type"] == "bullish" and htf == "bullish" and in_zone and price > e200 and is_trading_session(ts):
+                score = 20
+                if has_bull_bos: score += 25
+                if has_liq:      score += 20
+                if 45 <= rsi_val <= 70: score += 20
+                if score >= 35:
                     sl = round(ob["bottom"] - atr_val * 1.5, 5)
                     tp = round(price + (price - sl) * 2.0, 5)
                     current_trade = {
@@ -95,11 +96,12 @@ def run_backtest(candles, symbol="EURUSD"):
                     }
                     in_trade = True; break
 
-            elif ob["type"] == "bearish" and htf == "bearish":
-                if (in_zone and price < e200
-                        and 30 <= rsi_val <= 55
-                        and has_bear_bos and has_liq
-                        and is_trading_session(ts)):
+            elif ob["type"] == "bearish" and htf == "bearish" and in_zone and price < e200 and is_trading_session(ts):
+                score = 20
+                if has_bear_bos: score += 25
+                if has_liq:      score += 20
+                if 30 <= rsi_val <= 55: score += 20
+                if score >= 35:
                     sl = round(ob["top"] + atr_val * 1.5, 5)
                     tp = round(price - (sl - price) * 2.0, 5)
                     current_trade = {

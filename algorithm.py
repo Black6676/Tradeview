@@ -213,14 +213,18 @@ def detect_order_blocks(df, lookback=10):
     highs  = df["high"].values
     lows   = df["low"].values
     times  = df["time"].values
-    volumes = df["volume"].values if "volume" in df.columns and df["volume"].sum() > 0 else np.ones(len(df))
+    # Twelve Data free tier returns 0 volume for forex — treat as always valid
+    raw_vol = df["volume"].values if "volume" in df.columns else np.ones(len(df))
+    has_real_volume = raw_vol.sum() > 0
+    volumes = raw_vol if has_real_volume else np.ones(len(df))
     bull_obs, bear_obs = [], []
 
     for i in range(lookback, len(df) - 1):
         body       = abs(closes[i] - opens[i])
         threshold  = 1.2 * atr.iloc[i]
         vol_avg    = np.mean(volumes[max(0, i - lookback):i + 1])
-        vol_strong = volumes[i] > vol_avg * 1.2 if vol_avg > 0 else True
+        # Only apply volume filter if real volume data exists
+        vol_strong = (volumes[i] > vol_avg * 1.2) if (has_real_volume and vol_avg > 0) else True
 
         if closes[i] > opens[i] and body > threshold and vol_strong:
             for j in range(i - 1, max(i - lookback, 0) - 1, -1):
