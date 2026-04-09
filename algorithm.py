@@ -450,14 +450,15 @@ def execute_trade_mt5(signal, symbol="XAUUSD", lot=None):
         digits     = sym_info.digits if sym_info else 5
 
         # Enforce minimum stop distance from broker
-        stop_level  = sym_info.trade_stops_level if sym_info else 0
-        point       = sym_info.point if sym_info else 0.00001
-        min_dist    = (stop_level + 5) * point   # add 5pt buffer
+        stop_level = getattr(sym_info, "trade_stops_level", 0) or 0
+        point      = getattr(sym_info, "point", 0.00001) or 0.00001
+        # Use ATR-based minimum if broker stop level is tiny
+        atr_val    = signal.get("atr", 0)
+        min_dist   = max((stop_level + 10) * point, atr_val * 0.5)
 
         sl = round(signal["sl"], digits)
         tp = round(signal["tp"], digits)
 
-        # Adjust SL if too close
         if signal["type"] == "buy":
             if price - sl < min_dist:
                 sl = round(price - min_dist, digits)
