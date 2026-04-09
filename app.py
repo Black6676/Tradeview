@@ -399,11 +399,14 @@ def mt5_close():
 
 # ── Run ────────────────────────────────────────────────────────
 
-# Only start scanner locally — Render free tier has 512MB RAM limit
+# Only start scanner locally — disabled on Render (RAM limit)
 import os
 IS_RENDER = os.environ.get("RENDER", False)
 if not IS_RENDER and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
-    start_scanner()
+    try:
+        start_scanner()
+    except Exception as e:
+        print(f"[Scanner] Failed to start: {e}")
 
 if __name__ == "__main__":
     app.run(debug=False, port=8080, use_reloader=False)
