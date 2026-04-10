@@ -104,9 +104,13 @@ def get_backtest():
     if symbol not in INSTRUMENTS:
         return jsonify({"error": "Unknown symbol"}), 400
     instrument = INSTRUMENTS[symbol]
-    tf_map = {"1h": {"interval": "1h", "outputsize": 500},
-              "4h": {"interval": "4h", "outputsize": 300},
-              "1d": {"interval": "1day", "outputsize": 365}}
+    # Use smaller outputsize on Render to stay within 30s timeout
+    is_render = os.environ.get("RENDER", False)
+    tf_map = {
+        "1h": {"interval": "1h",   "outputsize": 200 if is_render else 500},
+        "4h": {"interval": "4h",   "outputsize": 150 if is_render else 300},
+        "1d": {"interval": "1day", "outputsize": 200 if is_render else 365},
+    }
     tf = tf_map.get(timeframe, tf_map["1d"])
     try:
         params = {"symbol": instrument["symbol"], "interval": tf["interval"],
@@ -127,7 +131,7 @@ def get_backtest():
         result = run_backtest(candles, symbol=symbol)
         return jsonify(result)
     except requests.exceptions.Timeout:
-        return jsonify({"error": "Request timed out"}), 504
+        return jsonify({"error": "Request timed out — try a smaller timeframe"}), 504
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
