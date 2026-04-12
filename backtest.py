@@ -5,6 +5,7 @@ import algorithm as alg
 
 
 def run_backtest(candles, symbol="EURUSD"):
+    _candles = candles  # keep ref for ML seeding
     df = pd.DataFrame(candles)
     for col in ["open", "high", "low", "close"]:
         df[col] = df[col].astype(float)
@@ -163,5 +164,14 @@ def run_backtest(candles, symbol="EURUSD"):
         "lot":         t.get("lot", 0.01),
         "confidence":  t.get("confidence", 0),
     } for t in trades]
+
+    # Seed ML model with backtest results
+    try:
+        from ml_model import build_training_data_from_backtest, train_model
+        added = build_training_data_from_backtest(trade_log, candles if 'candles' in dir() else [])
+        if added >= 5:
+            train_model()
+    except Exception as e:
+        print(f"[ML] Seeding skipped: {e}")
 
     return {"stats": stats, "equity": equity, "trades": trade_log}

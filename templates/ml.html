@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TradeView — ML Model</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+  <link rel="stylesheet" href="/static/css/backtest.css"/>
+  <style>
+    .ml-layout { display:grid; grid-template-columns:1fr 1fr; gap:20px; padding:20px; height:calc(100vh - 52px - 28px); overflow-y:auto; }
+    .ml-card { background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:20px; }
+    .ml-card-title { font-family:var(--font-head); font-weight:800; font-size:13px; letter-spacing:0.1em; margin-bottom:16px; }
+    .ml-stat { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border); }
+    .ml-stat:last-child { border-bottom:none; }
+    .ml-stat-label { font-size:11px; color:var(--text3); letter-spacing:0.06em; text-transform:uppercase; }
+    .ml-stat-value { font-size:16px; font-weight:700; color:var(--text); font-family:var(--font-mono); }
+    .ml-status { display:flex; align-items:center; gap:8px; padding:12px; border-radius:6px; margin-bottom:16px; font-size:12px; }
+    .ml-status.ready { background:rgba(38,166,154,0.15); color:var(--green); border:1px solid rgba(38,166,154,0.3); }
+    .ml-status.not-ready { background:rgba(240,180,41,0.15); color:var(--accent); border:1px solid rgba(240,180,41,0.3); }
+    .ml-btn { width:100%; background:var(--accent); color:#000; border:none; font-family:var(--font-mono); font-weight:700; font-size:12px; padding:10px; border-radius:4px; cursor:pointer; margin-bottom:8px; transition:all 0.15s; }
+    .ml-btn:hover { background:#e0a020; }
+    .ml-btn.secondary { background:var(--bg3); color:var(--text2); border:1px solid var(--border2); }
+    .ml-btn.secondary:hover { border-color:var(--accent); color:var(--accent); }
+    .ml-btn:disabled { opacity:0.5; cursor:not-allowed; }
+    .progress-bar { height:8px; background:var(--bg3); border-radius:4px; overflow:hidden; margin:8px 0; }
+    .progress-fill { height:100%; background:var(--green); border-radius:4px; transition:width 0.5s; }
+    .ml-log { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:12px; font-size:10px; color:var(--text2); line-height:1.8; max-height:200px; overflow-y:auto; font-family:var(--font-mono); white-space:pre-wrap; }
+    .signal-card { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:12px; margin-bottom:8px; }
+    .signal-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+    .signal-type { font-weight:700; font-size:13px; }
+    .signal-type.buy  { color:var(--green); }
+    .signal-type.sell { color:var(--red); }
+    .prob-bar { height:6px; background:var(--bg2); border-radius:3px; overflow:hidden; margin-top:4px; }
+    .prob-fill { height:100%; border-radius:3px; transition:width 0.5s; }
+    .col-2 { grid-column: span 2; }
+    .how-it-works { font-size:11px; color:var(--text2); line-height:1.8; }
+    .how-it-works h4 { color:var(--text); font-size:12px; margin:10px 0 4px; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo"><span class="logo-mark">T</span><span class="logo-text">TRADEVIEW</span></div>
+    <nav class="nav-tabs">
+      <a href="/" class="nav-tab">Live Chart</a>
+      <a href="/backtest" class="nav-tab">Backtest</a>
+      <a href="/walkforward" class="nav-tab">Walk-Forward</a>
+      <a href="/ml" class="nav-tab active">ML Model</a>
+      <a href="/alerts" class="nav-tab">Alerts</a>
+    </nav>
+  </header>
+
+  <div class="ml-layout">
+
+    <!-- Model Status -->
+    <div class="ml-card">
+      <div class="ml-card-title">Model Status</div>
+      <div id="mlStatus" class="ml-status not-ready">⏳ Checking model status…</div>
+
+      <div class="ml-stat">
+        <span class="ml-stat-label">Training Samples</span>
+        <span class="ml-stat-value" id="mlSamples">—</span>
+      </div>
+      <div class="ml-stat">
+        <span class="ml-stat-label">Min Required</span>
+        <span class="ml-stat-value" id="mlMin">20</span>
+      </div>
+      <div class="ml-stat">
+        <span class="ml-stat-label">Win Rate (training data)</span>
+        <span class="ml-stat-value" id="mlWinRate">—</span>
+      </div>
+      <div class="ml-stat">
+        <span class="ml-stat-label">Wins / Losses</span>
+        <span class="ml-stat-value" id="mlWL">—</span>
+      </div>
+
+      <div class="progress-bar" style="margin-top:12px">
+        <div class="progress-fill" id="mlProgress" style="width:0%"></div>
+      </div>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:12px" id="mlProgressLabel">0 / 20 samples</div>
+    </div>
+
+    <!-- Controls -->
+    <div class="ml-card">
+      <div class="ml-card-title">Train & Manage</div>
+
+      <button class="ml-btn" id="seedBtn" onclick="seedModel()">
+        Step 1 — Seed from Backtest (EUR/USD 1H)
+      </button>
+      <button class="ml-btn secondary" id="trainBtn" onclick="trainModel()">
+        Step 2 — Train XGBoost Model
+      </button>
+      <button class="ml-btn secondary" onclick="loadStatus()">
+        Refresh Status
+      </button>
+
+      <div style="margin-top:16px;font-size:10px;color:var(--text3);line-height:1.7">
+        <strong style="color:var(--text2)">How to get started:</strong><br>
+        1. Click "Seed from Backtest" to generate training data from historical trades<br>
+        2. Click "Train Model" once you have 20+ samples<br>
+        3. The model will automatically score future signals with win probability<br>
+        4. Run backtests on multiple pairs to grow the training dataset
+      </div>
+
+      <div style="margin-top:12px" id="mlLog" class="ml-log">Waiting for action…</div>
+    </div>
+
+    <!-- Live Signals with ML Scores -->
+    <div class="ml-card">
+      <div class="ml-card-title">Live Signal ML Scores</div>
+
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <select id="mlSymbol" style="flex:1;background:var(--bg3);border:1px solid var(--border2);color:var(--text);font-family:var(--font-mono);font-size:12px;padding:6px;border-radius:4px">
+          <option value="EURUSD">EUR/USD</option>
+          <option value="XAUUSD">XAU/USD</option>
+          <option value="USDJPY">USD/JPY</option>
+        </select>
+        <select id="mlTf" style="flex:1;background:var(--bg3);border:1px solid var(--border2);color:var(--text);font-family:var(--font-mono);font-size:12px;padding:6px;border-radius:4px">
+          <option value="1h">1H</option>
+          <option value="4h">4H</option>
+        </select>
+        <button class="ml-btn" style="flex:0 0 80px;margin:0" onclick="loadSignals()">Scan</button>
+      </div>
+
+      <div id="signalList"><div style="color:var(--text3);font-size:12px">Click Scan to load signals with ML win probability scores.</div></div>
+    </div>
+
+    <!-- How It Works -->
+    <div class="ml-card">
+      <div class="ml-card-title">How The ML Works</div>
+      <div class="how-it-works">
+        <h4>Phase 5 — XGBoost Classifier</h4>
+        The ML model learns from completed trades to predict whether a new signal will be a win or loss.
+
+        <h4>Features used (18 total)</h4>
+        Price distance from EMA20/50/200 · RSI value and regime · ATR volatility ratio · Signal direction · HTF bias alignment · Order block width · SL distance · Recent BOS count · Liquidity events · FVG presence · Price momentum · Candle body strength
+
+        <h4>Training process</h4>
+        1. Run backtest → completed trades become training samples<br>
+        2. Each trade's market context is converted to 18 numerical features<br>
+        3. XGBoost trains a binary classifier (win=1, loss=0)<br>
+        4. Cross-validation confirms the model generalises
+
+        <h4>Live scoring</h4>
+        Every new signal gets a <strong>ML probability score</strong> (0–100%) alongside the manual confidence score. High ML prob + high manual confidence = strongest signals.
+
+        <h4>Auto-improvement</h4>
+        Every trade that closes (win or loss) is automatically added to training data. The model gets smarter over time as it sees more real trade outcomes.
+      </div>
+    </div>
+
+  </div>
+
+  <footer class="statusbar">
+    <span id="mlPageStatus">Ready</span>
+    <span class="status-right">Phase 5 · XGBoost ML Classifier</span>
+  </footer>
+
+  <script>
+    async function loadStatus() {
+      const res  = await fetch('/api/ml/stats');
+      const data = await res.json();
+      const ready = data.model_trained && data.samples >= data.min_samples;
+
+      document.getElementById('mlStatus').className = 'ml-status ' + (ready ? 'ready' : 'not-ready');
+      document.getElementById('mlStatus').textContent = ready
+        ? '✓ Model trained and ready — scoring live signals'
+        : `⏳ ${data.samples} / ${data.min_samples} samples needed to train`;
+
+      document.getElementById('mlSamples').textContent  = data.samples;
+      document.getElementById('mlMin').textContent      = data.min_samples;
+      document.getElementById('mlWinRate').textContent  = data.win_rate + '%';
+      document.getElementById('mlWL').textContent       = data.wins + ' / ' + data.losses;
+
+      const pct = Math.min(100, (data.samples / data.min_samples) * 100);
+      document.getElementById('mlProgress').style.width = pct + '%';
+      document.getElementById('mlProgress').style.background = ready ? 'var(--green)' : 'var(--accent)';
+      document.getElementById('mlProgressLabel').textContent = `${data.samples} / ${data.min_samples} samples`;
+    }
+
+    async function seedModel() {
+      const btn = document.getElementById('seedBtn');
+      btn.disabled = true; btn.textContent = 'Seeding…';
+      log('Running backtest to generate training data…');
+      try {
+        const res  = await fetch('/api/ml/seed?symbol=EURUSD&timeframe=1h', {method:'POST'});
+        const data = await res.json();
+        if (data.ok) {
+          log(`✓ Seeded ${data.ml_stats?.samples || '?'} samples. Win rate: ${data.ml_stats?.win_rate || '?'}%`);
+          loadStatus();
+        } else {
+          log('✗ ' + (data.error || 'Seeding failed'));
+        }
+      } catch(e) { log('✗ Error: ' + e.message); }
+      finally { btn.disabled=false; btn.textContent='Step 1 — Seed from Backtest (EUR/USD 1H)'; }
+    }
+
+    async function trainModel() {
+      const btn = document.getElementById('trainBtn');
+      btn.disabled = true; btn.textContent = 'Training…';
+      log('Training XGBoost model…');
+      try {
+        const res  = await fetch('/api/ml/train', {method:'POST'});
+        const data = await res.json();
+        if (data.ok) {
+          log('✓ Model trained successfully. Run "Scan" to see ML scores on live signals.');
+          loadStatus();
+        } else {
+          log('✗ ' + (data.message || data.error || 'Training failed'));
+        }
+      } catch(e) { log('✗ Error: ' + e.message); }
+      finally { btn.disabled=false; btn.textContent='Step 2 — Train XGBoost Model'; }
+    }
+
+    async function loadSignals() {
+      const symbol = document.getElementById('mlSymbol').value;
+      const tf     = document.getElementById('mlTf').value;
+      document.getElementById('signalList').innerHTML = '<div style="color:var(--text3);font-size:12px">Loading…</div>';
+      document.getElementById('mlPageStatus').textContent = 'Fetching signals…';
+      try {
+        const res  = await fetch(`/api/ohlcv?symbol=${symbol}&timeframe=${tf}`);
+        const data = await res.json();
+        const signals = data.signals || [];
+        if (!signals.length) {
+          document.getElementById('signalList').innerHTML = '<div style="color:var(--text3);font-size:12px">No signals on this timeframe right now.</div>';
+          return;
+        }
+        document.getElementById('signalList').innerHTML = signals.map(s => {
+          const prob    = s.ml_prob != null ? Math.round(s.ml_prob * 100) : null;
+          const probClr = prob != null ? (prob >= 65 ? '#26a69a' : prob >= 45 ? '#f0b429' : '#ef5350') : '#4a5470';
+          const probTxt = prob != null ? prob + '%' : 'No model yet';
+          return `<div class="signal-card">
+            <div class="signal-header">
+              <span class="signal-type ${s.type}">${s.type.toUpperCase()} @ ${s.price}</span>
+              <span style="font-size:11px;color:var(--text3)">${s.rsi ? 'RSI '+s.rsi : ''}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-bottom:4px">
+              <span>Manual confidence: ${s.confidence || '—'}%</span>
+              <span style="color:${probClr};font-weight:700">ML win prob: ${probTxt}</span>
+            </div>
+            <div class="prob-bar">
+              <div class="prob-fill" style="width:${prob||0}%;background:${probClr}"></div>
+            </div>
+            <div style="display:flex;gap:12px;font-size:10px;color:var(--text3);margin-top:6px">
+              <span>SL: ${s.sl}</span><span>TP: ${s.tp}</span><span>Lot: ${s.lot||0.01}</span>
+            </div>
+          </div>`;
+        }).join('');
+        document.getElementById('mlPageStatus').textContent = `${signals.length} signals loaded for ${symbol} ${tf.toUpperCase()}`;
+      } catch(e) {
+        document.getElementById('signalList').innerHTML = '<div style="color:var(--red);font-size:12px">Error: ' + e.message + '</div>';
+      }
+    }
+
+    function log(msg) {
+      const el = document.getElementById('mlLog');
+      el.textContent = msg + '\n' + el.textContent;
+    }
+
+    loadStatus();
+  </script>
+</body>
+</html>

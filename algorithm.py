@@ -360,6 +360,12 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                            "atr": round(atr_val, 5), "htf": htf,
                            "lot": lot_size(round(price - sl, 5))}
                     sig["confidence"] = compute_confidence(sig, "bullish", rsi_val, htf)
+                    # ML win probability (uses model if trained, falls back to manual score)
+                    try:
+                        from ml_model import predict_win_probability
+                        sig["ml_prob"] = predict_win_probability(sig, df, i)
+                    except Exception:
+                        sig["ml_prob"] = sig["confidence"] / 100.0
                     if sig["confidence"] >= CONFIDENCE_THRESHOLD:
                         signals.append(sig)
                         break
@@ -378,6 +384,11 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                            "atr": round(atr_val, 5), "htf": htf,
                            "lot": lot_size(round(sl - price, 5))}
                     sig["confidence"] = compute_confidence(sig, "bearish", rsi_val, htf)
+                    try:
+                        from ml_model import predict_win_probability
+                        sig["ml_prob"] = predict_win_probability(sig, df, i)
+                    except Exception:
+                        sig["ml_prob"] = sig["confidence"] / 100.0
                     if sig["confidence"] >= CONFIDENCE_THRESHOLD:
                         signals.append(sig)
                         break

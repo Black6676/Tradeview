@@ -6,3 +6,6 @@ gunicorn
 numpy
 scipy
 optuna
+xgboost
+scikit-learn
+joblib

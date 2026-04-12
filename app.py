@@ -44,6 +44,10 @@ def alerts_page():
 def walkforward_page():
     return render_template("walkforward.html")
 
+@app.route("/ml")
+def ml_page():
+    return render_template("ml.html")
+
 
 # ── API: Live chart data ───────────────────────────────────────
 
@@ -248,6 +252,63 @@ def execute_mt5_trade():
         execute_trade(signal, symbol=symbol, lot=lot, use_mt5=use_mt5)
 
         return jsonify({"ok": True, "message": f"Trade submitted: {signal['type'].upper()} {symbol}"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── API: ML Model ─────────────────────────────────────────────
+
+@app.route("/api/ml/stats")
+def ml_stats():
+    """Return ML model training status."""
+    try:
+        from ml_model import get_model_stats
+        return jsonify(get_model_stats())
+    except Exception as e:
+        return jsonify({"error": str(e), "model_trained": False, "samples": 0})
+
+
+@app.route("/api/ml/train", methods=["POST"])
+def ml_train():
+    """Manually trigger model retraining."""
+    try:
+        from ml_model import train_model
+        success = train_model()
+        return jsonify({"ok": success, "message": "Model trained" if success else "Not enough data"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ml/seed", methods=["POST"])
+def ml_seed():
+    """Seed ML model from a fresh backtest run."""
+    symbol    = request.args.get("symbol", "EURUSD")
+    timeframe = request.args.get("timeframe", "1h")
+    if symbol not in INSTRUMENTS:
+        return jsonify({"error": "Unknown symbol"}), 400
+    instrument = INSTRUMENTS[symbol]
+    tf_map = {"1h": {"interval": "1h", "outputsize": 300},
+              "4h": {"interval": "4h", "outputsize": 200}}
+    tf = tf_map.get(timeframe, tf_map["1h"])
+    try:
+        params = {"symbol": instrument["symbol"], "interval": tf["interval"],
+                  "outputsize": tf["outputsize"], "apikey": API_KEY, "format": "JSON"}
+        resp = requests.get(f"{BASE_URL}/time_series", params=params, timeout=15)
+        data = resp.json()
+        if "values" not in data:
+            return jsonify({"error": "No data"}), 502
+        candles = []
+        for bar in data["values"]:
+            candles.append({"time": int(pd.Timestamp(bar["datetime"]).timestamp()),
+                "open": round(float(bar["open"]), 5), "high": round(float(bar["high"]), 5),
+                "low": round(float(bar["low"]), 5), "close": round(float(bar["close"]), 5),
+                "volume": round(float(bar.get("volume", 0)), 2)})
+        candles.sort(key=lambda x: x["time"])
+        from backtest import run_backtest
+        from ml_model import get_model_stats
+        run_backtest(candles, symbol=symbol)
+        stats = get_model_stats()
+        return jsonify({"ok": True, "ml_stats": stats})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
