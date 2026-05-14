@@ -29,7 +29,8 @@ VANTAGE_LOGIN    = 24786681
 VANTAGE_PASSWORD = "Black@123"
 VANTAGE_SERVER   = "VantageInternational-Demo"
 
-_trade_history = []
+_trade_history  = []
+_executed_trades = set()   # tracks (time, type) of already-executed signals
 
 
 # ══════════════════════════════════════════════════════════════
@@ -635,11 +636,21 @@ def run_analysis(candles, symbol="EURUSD", timeframe="1h"):
                                    display_obs, signals, symbol, timeframe)
     ai_analysis = generate_ai_analysis(df, signals)
 
-    # Auto-execute best signal if threshold met
+    # Auto-execute — only signals that appear on the chart and haven't been executed yet
     if signals:
         best = max(signals, key=lambda x: x.get("confidence", 0))
-        if best.get("confidence", 0) >= CONFIDENCE_THRESHOLD:
+        sig_key = (best["time"], best["type"], symbol)
+        if best.get("confidence", 0) >= CONFIDENCE_THRESHOLD and sig_key not in _executed_trades:
+            _executed_trades.add(sig_key)
+            # Keep set from growing unbounded
+            if len(_executed_trades) > 200:
+                oldest = next(iter(_executed_trades))
+                _executed_trades.discard(oldest)
+            print(f"[Execute] NEW signal — {best['type'].upper()} {symbol} @ {best['price']} | "
+                  f"Conf: {best.get('confidence',0)}% | ML: {best.get('ml_prob','—')}")
             execute_trade_mt5(best, symbol=symbol, lot=best.get("lot", 0.01))
+        elif sig_key in _executed_trades:
+            print(f"[Execute] Already executed — {best['type'].upper()} {symbol} @ {best['price']} | skipped")
 
     print(f"[Analysis] {symbol} {timeframe} | {len(signals)} signals | "
           f"Bias: {bias} | HTF: {htf_bias} | Threshold: {CONFIDENCE_THRESHOLD}")

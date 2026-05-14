@@ -71,6 +71,8 @@ def run_scan():
                 cfg = email_config if email_config.get("enabled") else None
                 fresh = process_signals(signals, target["symbol"], target["timeframe"], cfg)
                 new_alerts.extend(fresh)
+                # Note: MT5 execution happens inside run_analysis via _executed_trades dedup
+                # Scanner only handles alerts — not direct execution
             # Small delay between API calls to respect rate limits
             time.sleep(2)
         except Exception as e:

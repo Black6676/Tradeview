@@ -256,6 +256,26 @@ def execute_mt5_trade():
         return jsonify({"error": str(e)}), 500
 
 
+# ── API: Execution Control ────────────────────────────────────
+
+@app.route("/api/executed")
+def get_executed():
+    """Show which signals have already been executed this session."""
+    from algorithm import _executed_trades
+    return jsonify({
+        "executed": [{"time": k[0], "type": k[1], "symbol": k[2]}
+                     for k in _executed_trades],
+        "count": len(_executed_trades)
+    })
+
+@app.route("/api/executed/clear", methods=["POST"])
+def clear_executed():
+    """Clear execution history — allows signals to re-fire."""
+    from algorithm import _executed_trades
+    _executed_trades.clear()
+    return jsonify({"ok": True, "message": "Execution history cleared"})
+
+
 # ── API: ML Model ─────────────────────────────────────────────
 
 @app.route("/api/ml/stats")
