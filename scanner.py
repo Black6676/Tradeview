@@ -68,8 +68,10 @@ def run_scan():
             analysis = run_analysis(candles, symbol=target["symbol"], timeframe=target["timeframe"])
             signals  = analysis.get("signals", [])
             if signals:
-                cfg = email_config if email_config.get("enabled") else None
-                fresh = process_signals(signals, target["symbol"], target["timeframe"], cfg)
+                # Only alert the most recent signal per instrument+timeframe
+                latest_only = [signals[-1]]
+                cfg   = email_config if email_config.get("enabled") else None
+                fresh = process_signals(latest_only, target["symbol"], target["timeframe"], cfg)
                 new_alerts.extend(fresh)
                 # Note: MT5 execution happens inside run_analysis via _executed_trades dedup
                 # Scanner only handles alerts — not direct execution
@@ -79,13 +81,23 @@ def run_scan():
             print(f"[Scanner] Error scanning {target['symbol']} {target['timeframe']}: {e}")
 
     with _lock:
-        latest_alerts = new_alerts + latest_alerts
-        latest_alerts = latest_alerts[:50]   # keep last 50
+        # Deduplicate — don't re-add signals already in the feed
+        existing_keys = {
+            (a.get("symbol"), a.get("timeframe"), a.get("time"), a.get("type"))
+            for a in latest_alerts
+        }
+        truly_new = [
+            a for a in new_alerts
+            if (a.get("symbol"), a.get("timeframe"), a.get("time"), a.get("type"))
+            not in existing_keys
+        ]
+        latest_alerts = truly_new + latest_alerts
+        latest_alerts = latest_alerts[:50]
 
     now = datetime.utcnow()
     scanner_status["last_scan"] = now.strftime("%Y-%m-%d %H:%M:%S UTC")
     scanner_status["next_scan"] = f"in {SCAN_INTERVAL // 60} minutes"
-    print(f"[Scanner] Scan complete. {len(new_alerts)} new signal(s) found.")
+    print(f"[Scanner] Scan complete. {len(truly_new) if 'truly_new' in dir() else len(new_alerts)} new signal(s) found.")
 
 
 def scanner_loop():
