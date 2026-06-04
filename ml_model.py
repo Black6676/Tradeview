@@ -223,13 +223,23 @@ def train_model():
     scaler = StandardScaler()
     X_sc   = scaler.fit_transform(X)
 
+    # Handle class imbalance — weight minority class higher
+    win_count  = int(y.sum())
+    loss_count = len(y) - win_count
+    scale_pos  = loss_count / win_count if win_count > 0 else 1.0
+
+    if win_count == 0 or loss_count == 0:
+        print(f"[ML] Cannot train — need both wins and losses. "
+              f"Currently: {win_count} wins, {loss_count} losses")
+        return False
+
     model = XGBClassifier(
         n_estimators=200,
         max_depth=4,
         learning_rate=0.05,
         subsample=0.8,
         colsample_bytree=0.8,
-        use_label_encoder=False,
+        scale_pos_weight=scale_pos,   # handles imbalanced classes
         eval_metric="logloss",
         random_state=42,
         n_jobs=1,
@@ -237,8 +247,10 @@ def train_model():
     model.fit(X_sc, y)
 
     # Cross-validation score
-    scores = cross_val_score(model, X_sc, y, cv=min(5, len(data)//4), scoring="accuracy")
-    print(f"[ML] Model trained — CV accuracy: {scores.mean():.1%} ± {scores.std():.1%} | Samples: {len(data)}")
+    cv_folds = min(5, max(2, len(data)//5))
+    scores = cross_val_score(model, X_sc, y, cv=cv_folds, scoring="roc_auc")
+    print(f"[ML] Model trained — ROC-AUC: {scores.mean():.3f} ± {scores.std():.3f} | "
+          f"Samples: {len(data)} | Wins: {win_count} | Losses: {loss_count}")
 
     joblib.dump(model,  MODEL_PATH)
     joblib.dump(scaler, SCALER_PATH)

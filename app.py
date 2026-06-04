@@ -80,6 +80,25 @@ def get_ohlcv():
         analysis   = run_analysis(candles, symbol=symbol, timeframe=timeframe)
         last_price = candles[-1]["close"]
         change_pct = round((candles[-1]["close"] - candles[-2]["close"]) / candles[-2]["close"] * 100, 3) if len(candles) >= 2 else 0
+
+        # ── Auto-execute on main thread (MT5 safe) ─────────────
+        if not IS_RENDER:
+            signals = analysis.get("signals", [])
+            if signals:
+                best = max(signals, key=lambda x: x.get("confidence", 0))
+                sig_key = (best["time"], best["type"], symbol, timeframe)
+                if sig_key not in _executed_signal_keys and best.get("confidence", 0) >= 70:
+                    _executed_signal_keys.add(sig_key)
+                    if len(_executed_signal_keys) > 200:
+                        _executed_signal_keys.pop()
+                    print(f"[MT5] Auto-executing {best['type'].upper()} {symbol} @ {best['price']} "
+                          f"| Conf: {best.get('confidence',0)}% | Lot: {best.get('lot',0.01)}")
+                    try:
+                        from algorithm import execute_trade_mt5
+                        execute_trade_mt5(best, symbol=symbol, lot=best.get("lot", 0.01))
+                    except Exception as e:
+                        print(f"[MT5] Execution error: {e}")
+
         return jsonify({"meta": {"symbol": symbol, "label": instrument["label"], "timeframe": timeframe,
             "bars": len(candles), "last_price": last_price, "change_pct": change_pct,
             "bias": analysis["bias"], "last_rsi": analysis["last_rsi"]},
@@ -301,36 +320,49 @@ def ml_train():
 
 @app.route("/api/ml/seed", methods=["POST"])
 def ml_seed():
-    """Seed ML model from a fresh backtest run."""
-    symbol    = request.args.get("symbol", "EURUSD")
-    timeframe = request.args.get("timeframe", "1h")
-    if symbol not in INSTRUMENTS:
-        return jsonify({"error": "Unknown symbol"}), 400
-    instrument = INSTRUMENTS[symbol]
-    tf_map = {"1h": {"interval": "1h", "outputsize": 300},
-              "4h": {"interval": "4h", "outputsize": 200}}
-    tf = tf_map.get(timeframe, tf_map["1h"])
-    try:
-        params = {"symbol": instrument["symbol"], "interval": tf["interval"],
-                  "outputsize": tf["outputsize"], "apikey": API_KEY, "format": "JSON"}
-        resp = requests.get(f"{BASE_URL}/time_series", params=params, timeout=15)
-        data = resp.json()
-        if "values" not in data:
-            return jsonify({"error": "No data"}), 502
-        candles = []
-        for bar in data["values"]:
-            candles.append({"time": int(pd.Timestamp(bar["datetime"]).timestamp()),
-                "open": round(float(bar["open"]), 5), "high": round(float(bar["high"]), 5),
-                "low": round(float(bar["low"]), 5), "close": round(float(bar["close"]), 5),
-                "volume": round(float(bar.get("volume", 0)), 2)})
-        candles.sort(key=lambda x: x["time"])
-        from backtest import run_backtest
-        from ml_model import get_model_stats
-        run_backtest(candles, symbol=symbol)
-        stats = get_model_stats()
-        return jsonify({"ok": True, "ml_stats": stats})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    """Seed ML model by running backtest across all instruments and timeframes."""
+    from backtest import run_backtest
+    from ml_model import get_model_stats, load_training_data, save_training_data
+
+    # Clear old all-loss data first
+    save_training_data([])
+
+    SEED_TARGETS = [
+        {"symbol": "EURUSD", "td": "EUR/USD",  "interval": "1h",   "outputsize": 500},
+        {"symbol": "EURUSD", "td": "EUR/USD",  "interval": "4h",   "outputsize": 300},
+        {"symbol": "XAUUSD", "td": "XAU/USD",  "interval": "1h",   "outputsize": 500},
+        {"symbol": "USDJPY", "td": "USD/JPY",  "interval": "1h",   "outputsize": 500},
+    ]
+
+    total_added = 0
+    results = []
+
+    for target in SEED_TARGETS:
+        try:
+            params = {"symbol": target["td"], "interval": target["interval"],
+                      "outputsize": target["outputsize"], "apikey": API_KEY, "format": "JSON"}
+            resp = requests.get(f"{BASE_URL}/time_series", params=params, timeout=15)
+            data = resp.json()
+            if "values" not in data:
+                continue
+            candles = []
+            for bar in data["values"]:
+                candles.append({"time": int(pd.Timestamp(bar["datetime"]).timestamp()),
+                    "open": round(float(bar["open"]), 5), "high": round(float(bar["high"]), 5),
+                    "low": round(float(bar["low"]), 5), "close": round(float(bar["close"]), 5),
+                    "volume": round(float(bar.get("volume", 0)), 2)})
+            candles.sort(key=lambda x: x["time"])
+            bt = run_backtest(candles, symbol=target["symbol"])
+            trades = bt.get("trades", [])
+            closed = [t for t in trades if t.get("result") in ("win","loss")]
+            results.append(f"{target['symbol']} {target['interval']}: {len(closed)} trades")
+            total_added += len(closed)
+        except Exception as e:
+            results.append(f"{target['symbol']} error: {str(e)[:50]}")
+
+    stats = get_model_stats()
+    return jsonify({"ok": True, "seeded": total_added,
+                    "results": results, "ml_stats": stats})
 
 
 # ── API: Signal Diagnostics ───────────────────────────────────
@@ -487,6 +519,7 @@ def mt5_close():
 # Only start scanner locally — disabled on Render (RAM limit)
 import os
 IS_RENDER = os.environ.get("RENDER", False)
+_executed_signal_keys = set()
 if not IS_RENDER and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
     try:
         start_scanner()
