@@ -82,17 +82,29 @@ def get_ohlcv():
         change_pct = round((candles[-1]["close"] - candles[-2]["close"]) / candles[-2]["close"] * 100, 3) if len(candles) >= 2 else 0
 
         # ── Auto-execute on main thread (MT5 safe) ─────────────
+        # Only executes signals with 100% confidence
+        # Fixed SL/TP = entry ± 10 pips
         if not IS_RENDER:
             signals = analysis.get("signals", [])
             if signals:
                 best = max(signals, key=lambda x: x.get("confidence", 0))
                 sig_key = (best["time"], best["type"], symbol, timeframe)
-                if sig_key not in _executed_signal_keys and best.get("confidence", 0) >= 70:
+                if sig_key not in _executed_signal_keys and best.get("confidence", 0) >= 100:
                     _executed_signal_keys.add(sig_key)
                     if len(_executed_signal_keys) > 200:
                         _executed_signal_keys.pop()
-                    print(f"[MT5] Auto-executing {best['type'].upper()} {symbol} @ {best['price']} "
-                          f"| Conf: {best.get('confidence',0)}% | Lot: {best.get('lot',0.01)}")
+                    # Fixed ±10 pip SL/TP override
+                    pip = 0.10 if symbol == "XAUUSD" else 0.001 if symbol == "USDJPY" else 0.0001
+                    fixed_dist = 10 * pip
+                    entry = best["price"]
+                    if best["type"] == "buy":
+                        best["sl"] = round(entry - fixed_dist, 5)
+                        best["tp"] = round(entry + fixed_dist, 5)
+                    else:
+                        best["sl"] = round(entry + fixed_dist, 5)
+                        best["tp"] = round(entry - fixed_dist, 5)
+                    print(f"[MT5] Executing {best['type'].upper()} {symbol} @ {entry} "
+                          f"| SL: {best['sl']} | TP: {best['tp']} | Conf: 100%")
                     try:
                         from algorithm import execute_trade_mt5
                         execute_trade_mt5(best, symbol=symbol, lot=best.get("lot", 0.01))

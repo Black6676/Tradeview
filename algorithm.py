@@ -346,7 +346,11 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                 continue
             in_zone = ob["bottom"] <= price <= ob["top"]
 
-            if ob["type"] == "bullish" and htf == "bullish" and in_zone and price > e200:
+            # Loosen zone entry: allow price within 1 ATR above/below OB
+            near_bull_zone = ob["bottom"] - atr_val <= price <= ob["top"] + atr_val
+            near_bear_zone = ob["bottom"] - atr_val <= price <= ob["top"] + atr_val
+
+            if ob["type"] == "bullish" and htf == "bullish" and near_bull_zone and price > e200:
                 score = 20
                 if has_bull_bos: score += 25
                 if has_liq:      score += 20
@@ -360,7 +364,6 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                            "atr": round(atr_val, 5), "htf": htf,
                            "lot": lot_size(round(price - sl, 5))}
                     sig["confidence"] = compute_confidence(sig, "bullish", rsi_val, htf)
-                    # ML win probability (uses model if trained, falls back to manual score)
                     try:
                         from ml_model import predict_win_probability
                         sig["ml_prob"] = predict_win_probability(sig, df, i)
@@ -370,7 +373,7 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
                         signals.append(sig)
                         break
 
-            elif ob["type"] == "bearish" and htf == "bearish" and in_zone and price < e200:
+            elif ob["type"] == "bearish" and htf == "bearish" and near_bear_zone and price < e200:
                 score = 20
                 if has_bear_bos: score += 25
                 if has_liq:      score += 20
