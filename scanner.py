@@ -1,7 +1,8 @@
 """
-Background scanner — checks all instruments and timeframes every 15 minutes.
-Runs as a separate thread inside the Flask app.
+Background scanner — checks all instruments every 15 minutes.
+Runs as a thread inside Flask. Executes MT5 trades on Windows (local only).
 """
+import os
 import threading
 import time
 import requests as req
@@ -20,13 +21,15 @@ SCAN_TARGETS = [
     {"symbol": "USDJPY", "td_symbol": "USD/JPY", "timeframe": "1h",  "interval": "1h",   "outputsize": 500},
 ]
 
-SCAN_INTERVAL = 15 * 60   # 15 minutes in seconds
+SCAN_INTERVAL  = 15 * 60
+IS_RENDER      = os.environ.get("RENDER", False)
 
-# Shared state — Flask reads this to serve /api/alerts
+# Shared state
 latest_alerts  = []
 scanner_status = {"last_scan": None, "next_scan": None, "running": False}
 email_config   = {"enabled": False}
 _lock          = threading.Lock()
+_executed_keys = set()   # tracks signals already executed this session
 
 
 def fetch_candles(td_symbol, interval, outputsize):
@@ -55,6 +58,28 @@ def fetch_candles(td_symbol, interval, outputsize):
     return candles
 
 
+def try_execute_mt5(signal, symbol):
+    """Execute trade via MT5 — only on Windows local, never on Render."""
+    if IS_RENDER:
+        return
+    pip  = 0.10 if symbol == "XAUUSD" else 0.001 if symbol == "USDJPY" else 0.0001
+    dist = 10 * pip
+    entry = signal["price"]
+    if signal["type"] == "buy":
+        signal["sl"] = round(entry - dist, 5)
+        signal["tp"] = round(entry + dist, 5)
+    else:
+        signal["sl"] = round(entry + dist, 5)
+        signal["tp"] = round(entry - dist, 5)
+    print(f"[Scanner-MT5] {signal['type'].upper()} {symbol} @ {entry} "
+          f"| SL:{signal['sl']} TP:{signal['tp']} | Conf:100%")
+    try:
+        from algorithm import execute_trade_mt5
+        execute_trade_mt5(signal, symbol=symbol, lot=signal.get("lot", 0.01))
+    except Exception as e:
+        print(f"[Scanner-MT5] Error: {e}")
+
+
 def run_scan():
     global latest_alerts
     print(f"[Scanner] Running scan at {datetime.utcnow().strftime('%H:%M:%S UTC')}")
@@ -65,23 +90,35 @@ def run_scan():
             candles = fetch_candles(target["td_symbol"], target["interval"], target["outputsize"])
             if not candles:
                 continue
+
             analysis = run_analysis(candles, symbol=target["symbol"], timeframe=target["timeframe"])
             signals  = analysis.get("signals", [])
-            if signals:
-                # Only alert the most recent signal per instrument+timeframe
-                latest_only = [signals[-1]]
-                cfg   = email_config if email_config.get("enabled") else None
-                fresh = process_signals(latest_only, target["symbol"], target["timeframe"], cfg)
-                new_alerts.extend(fresh)
-                # Note: MT5 execution happens inside run_analysis via _executed_trades dedup
-                # Scanner only handles alerts — not direct execution
-            # Small delay between API calls to respect rate limits
+
+            if not signals:
+                continue
+
+            best    = max(signals, key=lambda x: x.get("confidence", 0))
+            conf    = best.get("confidence", 0)
+            sig_key = (best["time"], best["type"], target["symbol"], target["timeframe"])
+
+            # ── MT5 execution (local Windows only, 100% conf) ──
+            if conf >= 100 and sig_key not in _executed_keys:
+                _executed_keys.add(sig_key)
+                if len(_executed_keys) > 200:
+                    _executed_keys.pop()
+                try_execute_mt5(dict(best), target["symbol"])
+
+            # ── Alert system ───────────────────────────────────
+            cfg   = email_config if email_config.get("enabled") else None
+            fresh = process_signals([best], target["symbol"], target["timeframe"], cfg)
+            new_alerts.extend(fresh)
+
             time.sleep(2)
+
         except Exception as e:
             print(f"[Scanner] Error scanning {target['symbol']} {target['timeframe']}: {e}")
 
     with _lock:
-        # Deduplicate — don't re-add signals already in the feed
         existing_keys = {
             (a.get("symbol"), a.get("timeframe"), a.get("time"), a.get("type"))
             for a in latest_alerts
@@ -97,7 +134,7 @@ def run_scan():
     now = datetime.utcnow()
     scanner_status["last_scan"] = now.strftime("%Y-%m-%d %H:%M:%S UTC")
     scanner_status["next_scan"] = f"in {SCAN_INTERVAL // 60} minutes"
-    print(f"[Scanner] Scan complete. {len(truly_new) if 'truly_new' in dir() else len(new_alerts)} new signal(s) found.")
+    print(f"[Scanner] Scan complete. {len(truly_new)} new signal(s) found.")
 
 
 def scanner_loop():

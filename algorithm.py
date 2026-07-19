@@ -25,8 +25,8 @@ MAX_TRADES_PER_DAY   = 3
 CONFIDENCE_THRESHOLD = 60
 
 # Vantage MT5 credentials
-VANTAGE_LOGIN    = 24786681
-VANTAGE_PASSWORD = "Black@123"
+VANTAGE_LOGIN    = 25788296
+VANTAGE_PASSWORD = "JdB5t&e0"
 VANTAGE_SERVER   = "VantageInternational-Demo"
 
 _trade_history  = []
