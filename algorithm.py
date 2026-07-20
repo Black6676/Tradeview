@@ -26,8 +26,8 @@ CONFIDENCE_THRESHOLD = 60
 
 # Vantage MT5 credentials
 VANTAGE_LOGIN    = 25788296
-VANTAGE_PASSWORD = "JdB5t&e0"
-VANTAGE_SERVER   = "VantageInternational-Demo"
+VANTAGE_PASSWORD = "Black@123"
+VANTAGE_SERVER   = "VantageMarkets-Demo"
 
 _trade_history  = []
 
@@ -410,16 +410,32 @@ def detect_entry_signals(df, atr_series, htf_bias_map, for_display=True):
 # ══════════════════════════════════════════════════════════════
 
 def mt5_connect():
+    """
+    Connect to MT5. If terminal is already open and logged in,
+    just initialize without credentials (uses existing session).
+    Falls back to full login if needed.
+    """
     if not MT5_AVAILABLE:
         print("[MT5] MetaTrader5 package not available on this platform")
         return False
-    if not mt5.initialize(login=VANTAGE_LOGIN,
-                          password=VANTAGE_PASSWORD,
-                          server=VANTAGE_SERVER):
-        print(f"[MT5] Login failed: {mt5.last_error()}")
-        return False
-    print(f"[MT5] Connected to {VANTAGE_SERVER}")
-    return True
+
+    # Try connecting to already-running terminal first (no credentials needed)
+    if mt5.initialize():
+        info = mt5.account_info()
+        if info and info.login > 0:
+            print(f"[MT5] Connected to existing session — {info.server} | Balance: ${info.balance:.2f}")
+            return True
+        mt5.shutdown()
+
+    # Fall back to full login if no active session
+    if mt5.initialize(login=VANTAGE_LOGIN,
+                      password=VANTAGE_PASSWORD,
+                      server=VANTAGE_SERVER):
+        print(f"[MT5] Connected to {VANTAGE_SERVER}")
+        return True
+
+    print(f"[MT5] Login failed: {mt5.last_error()}")
+    return False
 
 
 def fetch_live_data_mt5(symbol="XAUUSD", timeframe=None, n=500):

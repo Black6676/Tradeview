@@ -16,17 +16,31 @@ import pandas as pd
 from datetime import datetime
 
 # ── Credentials ────────────────────────────────────────────────
-MT5_ACCOUNT  = 24786681
-MT5_PASSWORD = "Black@123"   # <-- fill this in
-MT5_SERVER   = "VantageInternational-Demo"
+MT5_ACCOUNT  = 	25802300
+MT5_PASSWORD = "zQj2*fd!"   # <-- fill this in
+MT5_SERVER   = "VantageMarkets-Demo"
 
 
 # ── Connect ────────────────────────────────────────────────────
 
 def connect():
-    """Initialize and log into MT5. Returns True if successful."""
+    """
+    Connect to MT5 terminal.
+    If MT5 is already open and logged in, use that session directly.
+    Falls back to full credential login if needed.
+    """
+    # Try existing session first
+    if mt5.initialize():
+        info = mt5.account_info()
+        if info and info.login > 0:
+            print(f"[MT5] ✓ Using existing session — Account: {info.login} | "
+                  f"Balance: ${info.balance:.2f} | Server: {info.server}")
+            return True
+        mt5.shutdown()
+
+    # Full login fallback
     if not mt5.initialize():
-        print(f"[MT5] initialize() failed — error: {mt5.last_error()}")
+        print(f"[MT5] initialize() failed: {mt5.last_error()}")
         return False
 
     authorized = mt5.login(
@@ -34,19 +48,14 @@ def connect():
         password=MT5_PASSWORD,
         server=MT5_SERVER,
     )
-
     if not authorized:
-        print(f"[MT5] Login failed — error: {mt5.last_error()}")
+        print(f"[MT5] Login failed: {mt5.last_error()}")
         mt5.shutdown()
         return False
 
     info = mt5.account_info()
     print(f"[MT5] ✓ Connected to {MT5_SERVER}")
-    print(f"      Account : {info.login}")
-    print(f"      Name    : {info.name}")
-    print(f"      Balance : ${info.balance:.2f}")
-    print(f"      Equity  : ${info.equity:.2f}")
-    print(f"      Leverage: 1:{info.leverage}")
+    print(f"      Account : {info.login} | Balance: ${info.balance:.2f}")
     return True
 
 
