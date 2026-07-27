@@ -16,9 +16,9 @@ import pandas as pd
 from datetime import datetime
 
 # ── Credentials ────────────────────────────────────────────────
-MT5_ACCOUNT  = 	25802300
-MT5_PASSWORD = "zQj2*fd!"   # <-- fill this in
-MT5_SERVER   = "VantageMarkets-Demo"
+MT5_ACCOUNT  = 	68336677
+MT5_PASSWORD = "Qwerty1@345"   # <-- fill this in
+MT5_SERVER   = "RoboForex-Pro"
 
 
 # ── Connect ────────────────────────────────────────────────────
