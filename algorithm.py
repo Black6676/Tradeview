@@ -278,6 +278,10 @@ def detect_entry_signals(df, atr_series, htf_bias_map, confidence_threshold=60, 
     times     = df["time"].values
     signals   = []
 
+    # Precompute time -> row index once (O(n)) instead of scanning the whole
+    # DataFrame for every (i, order_block) pair (was O(n^2 * m)).
+    time_to_idx = {int(t): idx for idx, t in enumerate(times)}
+
     for i in range(200, len(df)):
         ts = int(times[i])
         if not is_trading_session(ts):
@@ -300,8 +304,8 @@ def detect_entry_signals(df, atr_series, htf_bias_map, confidence_threshold=60, 
         candidates = []
 
         for ob in all_obs:
-            ob_rows = df[df["time"] == ob["time"]]
-            if ob_rows.empty or ob_rows.index[0] >= i:
+            ob_idx = time_to_idx.get(ob["time"])
+            if ob_idx is None or ob_idx >= i:
                 continue
             in_zone = ob["bottom"] <= price <= ob["top"]
             near_zone = ob["bottom"] - atr_val <= price <= ob["top"] + atr_val
