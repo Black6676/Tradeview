@@ -1,5 +1,8 @@
 import pandas as pd
 import numpy as np
+import sqlite3
+import json
+import os
 from datetime import datetime, timezone
 
 try:
@@ -20,11 +23,14 @@ RISK_PER_TRADE       = 0.01
 MAX_TRADES_PER_DAY   = 3
 BASE_CONFIDENCE      = 60   # fixed base, never mutated by backtest
 
+# ACCURACY TUNING — exposed for integration with additional techniques
+OB_BODY_ATR_MULT     = 0.75  # Body must be > 75% of ATR to qualify as displacement.
+                             # 0.5 = too noisy; 1.1 = too strict (gates out most candles).
+                             # 0.75 selects genuine momentum while remaining achievable.
+
 VANTAGE_LOGIN    = 25788296
 VANTAGE_PASSWORD = "Black@123"
 VANTAGE_SERVER   = "VantageMarkets-Demo"
-
-_trade_history = []
 
 # INDICATORS
 
@@ -87,12 +93,37 @@ def apply_trade_management(trade, current_price):
     return trade
 
 
+_DB_PATH = os.environ.get("TRADE_HISTORY_DB", os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.db"))
+
+
+def _get_db():
+    conn = sqlite3.connect(_DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS trade_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+    """)
+    return conn
+
+
 def get_adaptive_threshold():
-    """Compute adaptive threshold from recent trade history WITHOUT mutating globals."""
-    if len(_trade_history) < 10:
+    """Compute adaptive threshold from recent trade history WITHOUT mutating globals.
+    Backed by SQLite so it survives worker restarts (previously an in-memory
+    list that silently reset on every crash)."""
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT data FROM trade_history ORDER BY id DESC LIMIT 50"
+        ).fetchall()
+    finally:
+        conn.close()
+    if len(rows) < 10:
         return BASE_CONFIDENCE
-    wins = sum(1 for t in _trade_history if t.get("result") == "win")
-    rate = wins / len(_trade_history)
+    trades = [json.loads(r[0]) for r in rows]
+    wins   = sum(1 for t in trades if t.get("result") == "win")
+    rate   = wins / len(trades)
     if rate < 0.4:
         return min(85, BASE_CONFIDENCE + 5)
     elif rate > 0.6:
@@ -101,9 +132,22 @@ def get_adaptive_threshold():
 
 
 def record_trade_result(signal, result):
-    _trade_history.append({**signal, "result": result})
-    if len(_trade_history) > 50:
-        _trade_history.pop(0)
+    conn = _get_db()
+    try:
+        entry = {**signal, "result": result}
+        conn.execute(
+            "INSERT INTO trade_history (data, created_at) VALUES (?, ?)",
+            (json.dumps(entry), datetime.now(tz=timezone.utc).timestamp()),
+        )
+        conn.commit()
+        conn.execute("""
+            DELETE FROM trade_history WHERE id NOT IN (
+                SELECT id FROM trade_history ORDER BY id DESC LIMIT 50
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
 
 # HTF BIAS (4H resampling)
 
@@ -196,7 +240,20 @@ def detect_fvg(df):
 
 # ORDER BLOCKS
 
-def detect_order_blocks(df, lookback=10):
+def detect_order_blocks(df, lookback=10, body_atr_mult=OB_BODY_ATR_MULT):
+    """
+    body_atr_mult: how large a candle's body must be, relative to ATR, to
+    count as a "displacement" candle that can anchor an order block.
+
+    ATR is built from high-low range (includes wicks), while body is just
+    open-close. Typical bodies are ~40-60% of ATR. 
+
+    - 1.1  -> too strict; often zero order blocks (gated out nearly every candle).
+    - 0.5  -> too loose; normal candles treated as displacement (noisy, hurts accuracy).
+    - 0.75 -> balanced; selects genuine momentum candles without over-filtering.
+
+    Tune per-instrument/timeframe via the OB_BODY_ATR_MULT global constant.
+    """
     atr    = compute_atr(df)
     o      = df["open"].values
     c      = df["close"].values
@@ -207,7 +264,7 @@ def detect_order_blocks(df, lookback=10):
 
     for i in range(lookback, len(df) - 1):
         body   = abs(c[i] - o[i])
-        thresh = 1.1 * atr.iloc[i]
+        thresh = body_atr_mult * atr.iloc[i]
         if body <= thresh:
             continue
 
@@ -539,6 +596,17 @@ def run_analysis(candles, symbol="EURUSD", timeframe="1h"):
         df[col] = df[col].astype(float)
     df["time"] = df["time"].astype(int)
     df = df.sort_values("time").reset_index(drop=True)
+
+    # Drop the still-forming candle. Its OHLC keeps changing until the bar
+    # actually closes, which was making swings/order-blocks/signals near the
+    # tail flicker in and out between requests. We infer "closed" from the
+    # bar interval implied by the last two candles' timestamps.
+    if len(df) >= 3:
+        interval = int(df["time"].iloc[-1] - df["time"].iloc[-2])
+        now_ts   = int(datetime.now(tz=timezone.utc).timestamp())
+        if interval > 0 and (now_ts - int(df["time"].iloc[-1])) < interval:
+            df = df.iloc[:-1].reset_index(drop=True)
+
     closes = df["close"]
     times  = df["time"].values
     atr    = compute_atr(df)
