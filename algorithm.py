@@ -276,10 +276,10 @@ def detect_fvg(df):
 
 
 # ══════════════════════════════════════════════════════════════
-# ORDER BLOCKS  (body_atr_mult=0.5 — your fix, correct)
+# ORDER BLOCKS
 # ══════════════════════════════════════════════════════════════
 
-def detect_order_blocks(df, lookback=10, body_atr_mult=0.7):
+def detect_order_blocks(df, lookback=10, body_atr_mult=1.1):
     atr    = compute_atr(df)
     o      = df["open"].values
     c      = df["close"].values

@@ -29,7 +29,25 @@ latest_alerts  = []
 scanner_status = {"last_scan": None, "next_scan": None, "running": False}
 email_config   = {"enabled": False}
 _lock          = threading.Lock()
-_executed_keys = set()   # tracks signals already executed this session
+_executed_keys = set()   # tracks signals already executed
+_EXECUTED_FILE = "scanner_executed.json"
+
+def _load_executed():
+    global _executed_keys
+    import json, os
+    if os.path.exists(_EXECUTED_FILE):
+        try:
+            with open(_EXECUTED_FILE) as f:
+                _executed_keys = set(json.load(f))
+        except Exception:
+            _executed_keys = set()
+
+def _save_executed():
+    import json
+    with open(_EXECUTED_FILE, "w") as f:
+        json.dump(list(_executed_keys)[-500:], f)
+
+_load_executed()  # load on import
 
 
 def fetch_candles(td_symbol, interval, outputsize):
@@ -101,11 +119,14 @@ def run_scan():
             conf    = best.get("confidence", 0)
             sig_key = (best["time"], best["type"], target["symbol"], target["timeframe"])
 
-            # ── MT5 execution (local Windows only, 100% conf) ──
-            if conf >= 100 and sig_key not in _executed_keys:
+            # ── MT5 execution (local Windows only) ────────────
+            # Risk rule: execute if confidence >= 70% (not hardcoded 100)
+            # Risk limits (4% daily, 10% total) checked inside execute_trade_mt5
+            if conf >= 70 and sig_key not in _executed_keys and not IS_RENDER:
                 _executed_keys.add(sig_key)
                 if len(_executed_keys) > 200:
                     _executed_keys.pop()
+                _save_executed()
                 try_execute_mt5(dict(best), target["symbol"])
 
             # ── Alert system ───────────────────────────────────
